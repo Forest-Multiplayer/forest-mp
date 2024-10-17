@@ -355,6 +355,11 @@ void SetUSBDeviceWhitelist(const std::set<std::pair<u16, u16>>& devices);
 extern const Info<bool> MAIN_EMULATE_SKYLANDER_PORTAL;
 extern const Info<bool> MAIN_EMULATE_INFINITY_BASE;
 
+// ACMP
+
+extern const Info<std::string> ACMP_IP;
+extern const Info<u16> ACMP_PORT;
+
 // GameCube path utility functions
 
 // Replaces NTSC-K with some other region, and doesn't replace non-NTSC-K regions

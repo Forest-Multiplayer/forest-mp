@@ -572,6 +572,13 @@ const Info<bool> MAIN_EMULATE_SKYLANDER_PORTAL{
 const Info<bool> MAIN_EMULATE_INFINITY_BASE{
     {System::Main, "EmulatedUSBDevices", "EmulateInfinityBase"}, false};
 
+// ACMP
+
+const Info<std::string> ACMP_IP{{System::Main, "ACMP", "IP"}, "127.0.0.1"};
+
+const Info<u16> ACMP_PORT{
+    {System::Main, "ACMP", "PORT"}, 4404};
+
 // The reason we need this function is because some memory card code
 // expects to get a non-NTSC-K region even if we're emulating an NTSC-K Wii.
 DiscIO::Region ToGameCubeRegion(DiscIO::Region region)
