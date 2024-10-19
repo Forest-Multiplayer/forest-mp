@@ -9,6 +9,10 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 
+#define ID_ADDR 0x80003100
+#define ID_VAL 0x7c0802a6
+#define CURR_FRAME_ADDR 0x812f31d4
+
 namespace ACMP
 {
   bool s_initialized = false;
@@ -18,6 +22,12 @@ namespace ACMP
 
   void run_mod(const Core::CPUThreadGuard& guard)
   {
+    if (PowerPC::MMU::HostRead_U32(guard, CURR_FRAME_ADDR) == 0)
+    {
+      // wait for a full boot, the game initializes twice.
+      return;
+    }
+
     if (!s_initialized)
     {
       init_mod(guard);
@@ -35,14 +45,47 @@ namespace ACMP
     }
   }
 
-  void init_mod(const Core::CPUThreadGuard& guard)
+  void shutdown()
   {
-    // Wait for the rel to load
-    if (PowerPC::MMU::HostRead_U32(guard, 0x8062aaa8) != 0x4bfff2e5)
+    if (s_server)
     {
-      return;
+      s_server->shutdown();
     }
 
+    if (s_client)
+    {
+      s_client->shutdown();
+    }
+
+    s_server = nullptr;
+    s_client = nullptr;
+    s_initialized = false;
+  }
+
+
+  bool start_host()
+  {
+    if (!s_server)
+    {
+      s_server = new ACMPHost();
+      return true;
+    }
+
+    return false;
+  }
+
+  bool start_client()
+  {
+    if (!s_client) {
+      s_client = new ACMPClient();
+      return true;
+    }
+
+    return false;
+  }
+
+  void init_mod(const Core::CPUThreadGuard& guard)
+  {
     setup_bat();
     write_elf(guard);
 
@@ -68,6 +111,9 @@ namespace ACMP
     bl_to_symbol(guard, 0x8038022c, "acmp_get_primary_player");
     bl_to_symbol(guard, 0x80380e40, "acmp_get_primary_player");
     bl_to_symbol(guard, 0x803827d8, "acmp_get_primary_player");
+
+    // if you disable the panic code, then your game cant break anymore
+    PowerPC::MMU::HostWrite_U32(guard, 0x8005a8a0, 0x60000000);
 
     s_initialized = true;
   }
@@ -98,11 +144,6 @@ namespace ACMP
       elf_file.LoadIntoMemory(Core::System::GetInstance(), false);
       elf_file.LoadSymbols(guard, s_symbolDB);
     }
-  }
-
-  void restart_mod(const Core::CPUThreadGuard& guard)
-  {
-    s_initialized = false;
   }
 
   void bl_to_symbol(const Core::CPUThreadGuard& guard, u32 addr, std::string_view symbol)

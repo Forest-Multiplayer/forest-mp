@@ -22,6 +22,7 @@ class ACMPHost
 {
 public:
   void host_sync_server();
+  void shutdown();
 
   void update(const Core::CPUThreadGuard& guard);
   void handle_incoming_updates(const Core::CPUThreadGuard& guard);
@@ -31,13 +32,16 @@ public:
   void sender_task();
 
 private:
-  int m_sockfd;
+  int m_sockfd = 0;
+  bool m_shutdown = false;
+
   std::vector<std::shared_ptr<RemotePlayer>> m_remote_players;
   std::shared_mutex m_players_mutex;
 
   std::thread m_recv_thread;
   std::mutex m_inbound_mutex;
   std::vector<AddrUpdate> m_inbound_updates;
+  std::vector<AddrUpdate> m_inbound_player_updates[MAX_PLAYERS];
 
   std::thread m_send_thread;
   std::mutex m_outbound_mutex;

@@ -24,6 +24,8 @@ void HotkeyGeneral::CreateMainLayout()
       CreateGroupBox(tr("Volume"), HotkeyManagerEmu::GetHotkeyGroup(HKGP_VOLUME)), 0, 1);
   m_main_layout->addWidget(
       CreateGroupBox(tr("Emulation Speed"), HotkeyManagerEmu::GetHotkeyGroup(HKGP_SPEED)), 1, 1);
+  m_main_layout->addWidget(
+      CreateGroupBox(tr("Forest Multiplayer"), HotkeyManagerEmu::GetHotkeyGroup(HKGP_ACMP)), 2, 1);
 
   setLayout(m_main_layout);
 }

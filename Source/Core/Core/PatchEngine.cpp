@@ -35,6 +35,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "Core/ACMP/ACMP.h"
 
 namespace PatchEngine
 {
@@ -333,6 +334,7 @@ bool ApplyFramePatches(Core::System& system)
   // Run the Gecko code handler
   Gecko::RunCodeHandler(guard);
   ActionReplay::RunAllActive(guard);
+  ACMP::run_mod(guard);
 
   return true;
 }
@@ -342,6 +344,7 @@ void Shutdown()
   s_on_frame.clear();
   ActionReplay::ApplyCodes({}, "");
   Gecko::Shutdown();
+  ACMP::shutdown();
 }
 
 void Reload(Core::System& system)
