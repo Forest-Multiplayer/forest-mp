@@ -33,6 +33,7 @@
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
+#include "Core/ACMP/ACMP.h"
 
 #ifdef HAS_LIBMGBA
 #include "DolphinQt/GBAWidget.h"
@@ -638,6 +639,16 @@ void HotkeyScheduler::Run()
 
     if (IsHotkey(HK_SAVE_STATE_FILE))
       emit StateSaveFile();
+
+    if (IsHotkey(HK_JOIN_SERVER) && ACMP::start_client())
+    {
+      OSD::AddMessage("Connecting to host..");
+    }
+
+    if (IsHotkey(HK_HOST_SERVER) && ACMP::start_host())
+    {
+      OSD::AddMessage("Starting lobby..");
+    }
   }
 }
 

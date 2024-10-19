@@ -16,6 +16,8 @@ class ACMPClient
 {
 public:
   void connect_to_sync_server();
+  void shutdown();
+
   void update_outbound_buffer(const Core::CPUThreadGuard& guard);
   void write_inbound_updates(const Core::CPUThreadGuard& guard);
 
@@ -24,7 +26,9 @@ public:
   void sender_task();
 
 private:
-  int m_sockfd;
+  int m_sockfd = 0;
+  bool m_shutdown = false;
+
   sockaddr_in m_host_addr;
 
   std::mutex m_inbound_mutex;

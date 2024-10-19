@@ -18,14 +18,12 @@ enum PacketType : u8
 
 struct JoinRequest
 {
-  PacketType type;
   char username[16];
   char uuid[16];
 };
 
 struct JoinAccept
 {
-  PacketType type;
   u8 player_count;
   // followed by the list of PlayerInfo
 };
@@ -49,7 +47,6 @@ struct AddrUpdate
 
 struct PlayerUpdate
 {
-  PacketType type;
   u8 player;
   u16 count;
   // followed by the list of AddrUpdates
@@ -57,7 +54,6 @@ struct PlayerUpdate
 
 struct WorldUpdate
 {
-  PacketType type;
   // u8 area; 
   u16 count;
   // followed by the list of AddrUpdates
