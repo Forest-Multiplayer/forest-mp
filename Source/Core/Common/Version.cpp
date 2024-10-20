@@ -9,7 +9,7 @@
 
 namespace Common
 {
-#define EMULATOR_NAME "Dolphin"
+#define EMULATOR_NAME "Forest Multiplayer"
 
 #ifdef _DEBUG
 #define BUILD_TYPE_STR "Debug "
@@ -18,6 +18,8 @@ namespace Common
 #else
 #define BUILD_TYPE_STR ""
 #endif
+
+#define ACMP_VER "v0.0.1"
 
 const std::string& GetScmRevStr()
 {
@@ -30,14 +32,14 @@ const std::string& GetScmRevStr()
 #ifdef __INTEL_COMPILER
       BUILD_TYPE_STR SCM_DESC_STR "-ICC";
 #else
-      BUILD_TYPE_STR SCM_DESC_STR;
+      BUILD_TYPE_STR ACMP_VER;
 #endif
   return scm_rev_str;
 }
 
 const std::string& GetScmRevGitStr()
 {
-  static const std::string scm_rev_git_str = SCM_REV_STR;
+  static const std::string scm_rev_git_str = ACMP_VER;
   return scm_rev_git_str;
 }
 
