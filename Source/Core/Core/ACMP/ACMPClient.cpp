@@ -57,7 +57,7 @@ void ACMPClient::update_outbound_buffer(const Core::CPUThreadGuard& guard)
     u32 val = PowerPC::MMU::HostRead_U32(guard, address);
     if (m_player_snapshot[i] != val)
     {
-      m_player_updates.push_back(AddrUpdate{i, val});
+      m_player_updates[i] = val;
       m_player_snapshot[i] = val;
     }
   }
@@ -188,10 +188,14 @@ void ACMPClient::sender_task()
 
     PlayerUpdate player_update;
     player_update.player = 0;
-    player_update.count = (u16) m_player_updates.size();
 
-    for (auto entry : m_player_updates)
+    char buffer[MOD_SYNC_BUFFER_SZ];
+    while (!m_player_updates.empty())
     {
+      int count = 0;
+      serialize_map<u16>(buffer, &count, m_player_updates);
+
+      player_update.count = count;
       n = sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0, (sockaddr*)&m_host_addr,
              sizeof(m_host_addr));
       if (n < 1)
@@ -204,7 +208,7 @@ void ACMPClient::sender_task()
         continue;
       }
 
-      sendto(m_sockfd, (char*)m_player_updates.data(), player_update.count * sizeof(AddrUpdate), 0,
+      sendto(m_sockfd, buffer, count * sizeof(AddrUpdate), 0,
              (struct sockaddr*)&m_host_addr, sizeof(m_host_addr));
     }
 
@@ -215,4 +219,4 @@ void ACMPClient::sender_task()
     std::this_thread::sleep_for(33ms);
   }
 }
-}
+}  // namespace ACMP

@@ -103,7 +103,7 @@ void ACMPHost::update_outgoing_updates(const Core::CPUThreadGuard& guard)
     u32 val = PowerPC::MMU::HostRead_U32(guard, address);
     if (m_host_player_snapshot[i] != val)
     {
-      m_host_player_updates.push_back(AddrUpdate{i, val});
+      m_host_player_updates[i] =  val;
       m_host_player_snapshot[i] = val;
     }
   }
@@ -114,7 +114,7 @@ void ACMPHost::update_outgoing_updates(const Core::CPUThreadGuard& guard)
     u32 val = PowerPC::MMU::HostRead_U32(guard, address);
     if (m_memory_snapshot[i] != val)
     {
-      m_outbound_updates.push_back(AddrUpdate{address, val});
+      m_outbound_updates[address] = val;
       m_memory_snapshot[i] = val;
     }
 
@@ -139,9 +139,6 @@ void ACMPHost::recv_task()
     n = recvfrom(m_sockfd, buffer, sizeof(PlayerUpdate), 0, (struct sockaddr*)&client_addr, &addr_sz);
     if (n < 1)
     {
-      DWORD p = GetLastError();
-      printf("%d", p);
-
       if (!m_sockfd)
       {
         break;
@@ -214,16 +211,15 @@ void ACMPHost::sender_task()
     std::unique_lock<std::mutex> lk(m_outbound_mutex);
     std::shared_lock lk2(m_players_mutex);
 
+    char buffer[MOD_SYNC_BUFFER_SZ];
     PacketType world_packet = PacketType::kWorldUpdate;
     while (!m_outbound_updates.empty())
     {
-      constexpr int max_updates_per_packet = MOD_SYNC_BUFFER_SZ / sizeof(AddrUpdate);
+      int count = 0;
+      serialize_map<u32>(buffer, &count, m_outbound_updates);
 
       WorldUpdate world_update;
-      world_update.count = (int)m_outbound_updates.size() > max_updates_per_packet ?
-                               max_updates_per_packet :
-                               (int)m_outbound_updates.size();
-
+      world_update.count = count;
       for (auto player : m_remote_players)
       {
         n = sendto(m_sockfd, (char*)&world_packet, sizeof(world_packet), 0,
@@ -240,29 +236,24 @@ void ACMPHost::sender_task()
 
         n = sendto(m_sockfd, (char*)&world_update, sizeof(world_update), 0,
                    (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, (char*) m_outbound_updates.data(), world_update.count * sizeof(AddrUpdate), 0,
+        sendto(m_sockfd, buffer, world_update.count * sizeof(AddrUpdate), 0,
                (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
       }
-
-      m_outbound_updates.erase(m_outbound_updates.begin(),
-                               m_outbound_updates.begin() + world_update.count);
     }
 
     PacketType player_packet = PacketType::kPlayerUpdate;
     for (auto player : m_remote_players)
     {
-      int host_slot = 0;
       for (int i = 0; i < m_remote_players.size(); i++)
       {
         std::shared_ptr<RemotePlayer> other_player = m_remote_players[i];
         if (memcmp(&player->peer_addr, &other_player->peer_addr, sizeof(SOCKADDR_IN)) == 0)
         {
-          host_slot = i;
           continue;
         }
 
         PlayerUpdate player_update;
-        player_update.player = i;
+        player_update.player = i + 1;
 
         std::lock_guard<std::mutex> lk3(other_player->inbound_updates_mutex);
         player_update.count = (u16)other_player->inbound_updates.size();
@@ -277,20 +268,29 @@ void ACMPHost::sender_task()
         other_player->inbound_updates.clear();
       }
 
-      PlayerUpdate player_update;
-      player_update.player = host_slot;
-
-      player_update.count = (u16) m_host_player_updates.size();
-      sendto(m_sockfd, (char*)&player_packet, sizeof(player_packet), 0,
-             (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-      sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0,
-               (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-      sendto(m_sockfd, (char*) m_host_player_updates.data(), player_update.count * sizeof(AddrUpdate), 0,
-             (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-
-      m_host_player_updates.clear();
       m_outbound_updates.clear();
     }
+
+    PlayerUpdate player_update;
+    player_update.player = 0;
+    while (!m_host_player_updates.empty())
+    {
+      int count = 0;
+      serialize_map<u16>(buffer, &count, m_host_player_updates);
+
+      player_update.count = count;
+      for (auto player : m_remote_players)
+      {
+        sendto(m_sockfd, (char*)&player_packet, sizeof(player_packet), 0,
+               (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
+        sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0,
+                 (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
+        sendto(m_sockfd, buffer, player_update.count * sizeof(AddrUpdate), 0,
+               (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
+      }
+    }
+
+    m_host_player_updates.clear();
 
     lk.unlock();
     lk2.unlock();
