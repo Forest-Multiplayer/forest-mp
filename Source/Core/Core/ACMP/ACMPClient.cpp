@@ -70,8 +70,11 @@ void ACMPClient::write_inbound_updates(const Core::CPUThreadGuard& guard)
   for (int i = 0; i < MAX_PLAYERS; i++)
   {
     u32 player = PowerPC::MMU::HostRead_U32(guard, players_addr + (i * 0x4)); 
-    if (player)
-    {
+    if (player && !m_inbound_player_updates[i].empty())
+    { 
+      // Enable drawing
+      PowerPC::MMU::HostWrite_U8(guard, 0, player + 0x149);
+
       for (auto entry : m_inbound_player_updates[i])
       {
         PowerPC::MMU::HostWrite_U32(guard, entry.value, player + entry.addr);
@@ -136,6 +139,7 @@ void ACMPClient::recv_task()
       PlayerUpdate* update = (PlayerUpdate*) buffer;
       u16 count = update->count;
       u8 player_id = update->player;
+
       if (update->count > MOD_SYNC_BUFFER_SZ)
       {
         ASSERT_MSG(CORE, 0, "Received invalid payload size from client");
