@@ -1,8 +1,9 @@
 #include "ACMPHost.h"
 #include "ACMP.h"
 
-#include <Common/Assert.h>
-#include <Core/PowerPC/MMU.h>
+#include "Common/Assert.h"
+#include "VideoCommon/OnScreenDisplay.h"
+#include "Core/PowerPC/MMU.h"
 
 namespace ACMP
 {
@@ -30,6 +31,8 @@ void ACMPHost::host_sync_server()
 
   m_recv_thread = std::thread([=] { recv_task(); });
   m_send_thread = std::thread([=] { sender_task(); });
+
+  OSD::AddMessage("Lobby started!");
 }
 
 void ACMPHost::shutdown()
@@ -73,8 +76,11 @@ void ACMPHost::handle_incoming_updates(const Core::CPUThreadGuard& guard)
   for (int i = 0; i < MAX_PLAYERS; i++)
   {
     u32 player = PowerPC::MMU::HostRead_U32(guard, players_addr + (i * 0x4));
-    if (player)
+    if (player && !m_inbound_player_updates[i].empty())
     {
+      // Enable drawing
+      PowerPC::MMU::HostWrite_U8(guard, 0, player + 0x149);
+
       for (auto entry : m_inbound_player_updates[i])
       {
         PowerPC::MMU::HostWrite_U32(guard, entry.value, player + entry.addr);
@@ -172,6 +178,8 @@ void ACMPHost::recv_task()
       lk2.unlock();
 
       lk.lock();
+
+      OSD::AddMessage("A new player has connected..");
     }
 
     //n = recvfrom(m_sockfd, buffer, (char*) type, 0, (struct sockaddr*) &client_addr, &addr_sz);
