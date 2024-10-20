@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Common/CommonTypes.h>
+#include <unordered_map>
 
 #define MOD_HEAP_BASE 0x81808000
 #define MOD_HEAP_SIZE 0x818FFFFF - MOD_HEAP_BASE // ~1MB
@@ -58,4 +59,22 @@ struct WorldUpdate
   u16 count;
   // followed by the list of AddrUpdates
 };
+
+template <typename T>
+void serialize_map(char buffer[MOD_SYNC_BUFFER_SZ], int* count,
+                   std::unordered_map<T, uint32_t>& map)
+{
+  constexpr int max_updates_per_packet = MOD_SYNC_BUFFER_SZ / sizeof(AddrUpdate);
+  int update_count = 0;
+
+  while (!map.empty() && update_count < max_updates_per_packet)
+  {
+    auto next = map.extract(map.begin());
+    AddrUpdate update = {next.key(), next.mapped()};
+    memcpy(&buffer[update_count * sizeof(AddrUpdate)], &update, sizeof(AddrUpdate)); 
+    update_count++;
+  }
+
+  *count = update_count;
+}
 }

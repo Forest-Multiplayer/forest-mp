@@ -6,6 +6,7 @@
 
 #include <thread>
 #include <mutex>
+#include <unordered_map>
 #include <WinSock2.h>
 
 struct AddrUpdate;
@@ -38,7 +39,7 @@ private:
   std::thread m_send_thread;
 
   uint32_t m_player_snapshot[0x126c];
-  std::vector<AddrUpdate> m_player_updates;
+  std::unordered_map<u16, uint32_t> m_player_updates;
   std::vector<AddrUpdate> m_inbound_world_updates;
   std::vector<AddrUpdate> m_inbound_player_updates[MAX_PLAYERS];
 };

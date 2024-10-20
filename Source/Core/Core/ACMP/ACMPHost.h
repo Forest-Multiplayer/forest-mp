@@ -7,6 +7,7 @@
 #include <thread>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 #include <WinSock2.h>
 
 namespace ACMP
@@ -45,11 +46,11 @@ private:
 
   std::thread m_send_thread;
   std::mutex m_outbound_mutex;
-  std::vector<AddrUpdate> m_outbound_updates;
+  std::unordered_map<u32, u32> m_outbound_updates;
 
   uint32_t m_memory_snapshot[MOD_HEAP_SIZE];
 
   uint32_t m_host_player_snapshot[0x126c];
-  std::vector<AddrUpdate> m_host_player_updates;
+  std::unordered_map<u16, u32> m_host_player_updates;
 };
 }  // namespace ACMP
