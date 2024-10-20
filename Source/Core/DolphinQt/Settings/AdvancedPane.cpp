@@ -123,6 +123,7 @@ void AdvancedPane::CreateLayout()
   main_layout->addWidget(ram_override);
 
   m_ram_override_checkbox = new QCheckBox(tr("Enable Emulated Memory Size Override"));
+  m_ram_override_checkbox->setEnabled(false);
   ram_override_layout->addWidget(m_ram_override_checkbox);
 
   auto* mem1_override_slider_layout = new QHBoxLayout();
@@ -131,6 +132,7 @@ void AdvancedPane::CreateLayout()
 
   m_mem1_override_slider = new QSlider(Qt::Horizontal);
   m_mem1_override_slider->setRange(24, 64);
+  m_mem1_override_slider->setEnabled(false);
   mem1_override_slider_layout->addWidget(m_mem1_override_slider);
 
   m_mem1_override_slider_label = new QLabel();
@@ -281,12 +283,6 @@ void AdvancedPane::Update()
     int clock = static_cast<int>(std::round(Config::Get(Config::MAIN_OVERCLOCK) * core_clock));
     return tr("%1% (%2 MHz)").arg(QString::number(percent), QString::number(clock));
   }());
-
-  m_ram_override_checkbox->setEnabled(!running);
-  SignalBlocking(m_ram_override_checkbox)->setChecked(enable_ram_override_widgets);
-
-  m_mem1_override_slider->setEnabled(enable_ram_override_widgets && !running);
-  m_mem1_override_slider_label->setEnabled(enable_ram_override_widgets && !running);
 
   {
     const QSignalBlocker blocker(m_mem1_override_slider);
