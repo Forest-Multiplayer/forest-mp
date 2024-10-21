@@ -14,6 +14,8 @@
 #include <QSlider>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QLineEdit>
+#include <QSpinBox>
 
 #include "Core/AchievementManager.h"
 #include "Core/Config/MainSettings.h"
@@ -81,6 +83,8 @@ void GeneralPane::CreateLayout()
   CreateAnalytics();
 #endif
 
+  CreateForest();
+
   m_main_layout->addStretch(1);
   setLayout(m_main_layout);
 }
@@ -132,6 +136,9 @@ void GeneralPane::ConnectLayout()
   connect(m_button_generate_new_identity, &QPushButton::clicked, this,
           &GeneralPane::GenerateNewIdentity);
 #endif
+
+  connect(m_acmp_ip, &QLineEdit::textChanged, this, &GeneralPane::OnSaveConfig);
+  connect(m_acmp_port, &QSpinBox::valueChanged, this, &GeneralPane::OnSaveConfig);
 }
 
 void GeneralPane::CreateBasic()
@@ -224,6 +231,30 @@ void GeneralPane::CreateFallbackRegion()
     m_combobox_fallback_region->addItem(option);
 }
 
+void GeneralPane::CreateForest()
+{
+  auto* acmp_group = new QGroupBox(tr("Forest Multiplayer"));
+  auto* acmp_group_layout = new QGridLayout;
+  acmp_group->setLayout(acmp_group_layout);
+  m_main_layout->addWidget(acmp_group);
+
+  m_acmp_ip_label = new QLabel;
+  m_acmp_ip_label->setText(tr("Host IP Address"));
+  acmp_group_layout->addWidget(m_acmp_ip_label, 0, 0);
+
+  m_acmp_ip = new QLineEdit;
+  acmp_group_layout->addWidget(m_acmp_ip, 0, 1);
+
+  m_acmp_port_label = new QLabel;
+  m_acmp_port_label->setText(tr("Host Port"));
+  acmp_group_layout->addWidget(m_acmp_port_label, 1, 0);
+
+  m_acmp_port = new QSpinBox;
+  m_acmp_port->setMinimum(0);
+  m_acmp_port->setMaximum(65535);
+  acmp_group_layout->addWidget(m_acmp_port, 1, 1);
+}
+
 #if defined(USE_ANALYTICS) && USE_ANALYTICS
 void GeneralPane::CreateAnalytics()
 {
@@ -281,6 +312,9 @@ void GeneralPane::LoadConfig()
     SignalBlocking(m_combobox_fallback_region)->setCurrentIndex(FALLBACK_REGION_NTSCK_INDEX);
   else
     SignalBlocking(m_combobox_fallback_region)->setCurrentIndex(FALLBACK_REGION_NTSCJ_INDEX);
+
+  SignalBlocking(m_acmp_ip)->setText(QString::fromStdString(Config::Get(Config::ACMP_IP)));
+  SignalBlocking(m_acmp_port)->setValue(Config::Get(Config::ACMP_PORT));
 }
 
 static QString UpdateTrackFromIndex(int index)
@@ -349,6 +383,9 @@ void GeneralPane::OnSaveConfig()
 #endif
   Settings::Instance().SetFallbackRegion(
       UpdateFallbackRegionFromIndex(m_combobox_fallback_region->currentIndex()));
+
+  Config::SetBaseOrCurrent(Config::ACMP_IP, m_acmp_ip->text().toStdString());
+  Config::SetBaseOrCurrent(Config::ACMP_PORT, m_acmp_port->value());
 
   settings.SaveSettings();
 }

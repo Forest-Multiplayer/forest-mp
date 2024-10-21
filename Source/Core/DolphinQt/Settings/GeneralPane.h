@@ -16,12 +16,13 @@ class QVBoxLayout;
 class ToolTipCheckBox;
 class ToolTipComboBox;
 class ToolTipPushButton;
+class QLineEdit;
+class QSpinBox;
 
 namespace Core
 {
 enum class State;
 }
-
 class GeneralPane final : public QWidget
 {
   Q_OBJECT
@@ -34,6 +35,7 @@ private:
   void CreateBasic();
   void CreateAutoUpdate();
   void CreateFallbackRegion();
+  void CreateForest();
   void AddDescriptions();
 
   void LoadConfig();
@@ -52,6 +54,10 @@ private:
 #ifdef USE_DISCORD_PRESENCE
   ToolTipCheckBox* m_checkbox_discord_presence;
 #endif
+  QLabel* m_acmp_ip_label;
+  QLineEdit* m_acmp_ip;
+  QLabel* m_acmp_port_label;
+  QSpinBox* m_acmp_port;
 
 // Analytics related
 #if defined(USE_ANALYTICS) && USE_ANALYTICS
