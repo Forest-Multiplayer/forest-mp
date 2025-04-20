@@ -2,309 +2,220 @@
 #include "ACMP.h"
 
 #include "Common/Assert.h"
-#include "VideoCommon/OnScreenDisplay.h"
 #include "Core/PowerPC/MMU.h"
+#include "VideoCommon/OnScreenDisplay.h"
+
+#include <chrono>
+#include <iostream>
+#include <thread>
 
 namespace ACMP
 {
-void ACMPHost::host_sync_server()
+bool Host::init(uint16_t port)
 {
-  struct sockaddr_in server_addr;
+  if (enet_initialize() != 0)
+    return false;
 
-  if ((m_sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-  {
-    ASSERT_MSG(CORE, 0, "Could not establish server. Is the port already in use?");
-    return;
-  }
+  ENetAddress address;
+  address.host = ENET_HOST_ANY;
+  address.port = port;
 
-  memset(&server_addr, 0, sizeof(server_addr));
-
-  server_addr.sin_family = AF_INET;
-  server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_addr.sin_port = htons(4404);
-
-  if (bind(m_sockfd, (const struct sockaddr*)&server_addr, sizeof(server_addr)) < 0)
-  {
-    ASSERT_MSG(CORE, 0, "Could not bind server address. Is the port already in use?");
-    return;
-  }
-
-  m_recv_thread = std::thread([=] { recv_task(); });
-  m_send_thread = std::thread([=] { sender_task(); });
-
-  OSD::AddMessage("Lobby started!");
+  server = enet_host_create(&address, 32, 2, 0, 0);
+  return server != nullptr;
 }
 
-void ACMPHost::shutdown()
+void Host::start()
 {
-  if (m_shutdown || !m_sockfd)
-  {
+  if (!server || running)
     return;
-  }
-
-  closesocket(m_sockfd);
-  m_sockfd = 0;
-  m_shutdown = true;
-
-  m_recv_thread.join();
-  m_send_thread.join();
+  running = true;
+  broadcasting = true;
+  pollThread = std::thread(&Host::pollLoop, this);
+  broadcastThread = std::thread(&Host::broadcastLoop, this);
 }
 
-void ACMPHost::update(const Core::CPUThreadGuard& guard)
+void Host::stop()
 {
-  if (m_shutdown)
-  {
-    return;
-  }
-
-  if (!m_sockfd)
-  {
-    host_sync_server();
-  }
-
-  PowerPC::MMU::HostWrite_U8(guard, 1,
-                             s_symbolDB.GetSymbolFromName("s_networking_started")->address);
-
-  handle_incoming_updates(guard);
-  update_outgoing_updates(guard);
+  running = false;
+  broadcasting = false;
+  if (pollThread.joinable())
+    pollThread.join();
+  if (broadcastThread.joinable())
+    broadcastThread.join();
 }
 
-void ACMPHost::handle_incoming_updates(const Core::CPUThreadGuard& guard)
+void Host::shutdown()
 {
+  stop();
+  if (server)
+  {
+    enet_host_destroy(server);
+    server = nullptr;
+    enet_deinitialize();
+  }
+}
+
+void Host::setSelfState(const PlayerUpdatePayload& update)
+{
+  std::lock_guard<std::mutex> lock(stateMutex);
+  players.updateFromPayload(update);
+}
+
+void Host::pollLoop()
+{
+  ENetEvent event;
+  while (running)
+  {
+    while (enet_host_service(server, &event, 10) > 0)
+    {
+      if (event.type == ENET_EVENT_TYPE_RECEIVE)
+      {
+        const Message* msg = reinterpret_cast<Message*>(event.packet->data);
+        handleMessage(event, msg);
+        enet_packet_destroy(event.packet);
+      }
+      else if (event.type == ENET_EVENT_TYPE_DISCONNECT)
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        auto it = peerToId.find(event.peer);
+        if (it != peerToId.end())
+        {
+          players.removePlayerById(it->second);
+          peerToId.erase(it);
+        }
+      }
+    }
+  }
+}
+
+void Host::handleMessage(ENetEvent& event, const Message* msg)
+{
+  switch (static_cast<MessageType>(msg->type))
+  {
+  case MessageType::IDENTIFY:
+    handleIdentify(event.peer, reinterpret_cast<const IdentifyPayload*>(msg->data));
+    break;
+  case MessageType::SPAWN_REQUEST:
+    handleSpawnRequest(event.peer);
+    break;
+  case MessageType::PLAYER_UPDATE:
+    handlePlayerUpdate(event.peer, reinterpret_cast<const PlayerUpdatePayload*>(msg->data));
+    break;
+  default:
+    break;
+  }
+}
+
+void Host::handleIdentify(ENetPeer* peer, const IdentifyPayload* payload)
+{
+  std::string id(payload->id);
+  peerToId[peer] = id;
+  players.bindPeerToId(id, peer);
+  std::cout << "IDENTIFY received from " << id << "\n";
+}
+
+void Host::handleSpawnRequest(ENetPeer* peer)
+{
+  auto it = peerToId.find(peer);
+  if (it == peerToId.end())
+    return;
+
+  SpawnData spawn {
+    players.getLocalPlayerState().data.world_position.position.x,
+    players.getLocalPlayerState().data.world_position.position.y,
+    players.getLocalPlayerState().data.world_position.position.z,
+    90.0f
+  };
+
+  sendMessage(peer, MessageType::SPAWN_ACCEPTED, &spawn, sizeof(spawn));
+}
+
+void Host::handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update)
+{
+  auto it = peerToId.find(peer);
+  if (it == peerToId.end())
+    return;
+
+  std::lock_guard<std::mutex> lock(stateMutex);
+  players.updateFromPayload(*update);
+}
+
+void Host::broadcastLoop()
+{
+  using namespace std::chrono;
+  const auto interval = milliseconds(16);
+
+  while (broadcasting)
+  {
+    auto start = steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(stateMutex);
+
+    auto updates = players.getRemotePlayers();
+    for (const auto& state : updates)
+    {
+      if (state.dirty)
+      {
+        for (auto& [peer, id] : peerToId)
+        {
+          sendMessage(peer, MessageType::PLAYER_UPDATE, &state.data, sizeof(state.data));
+        }
+      }
+    }
+
+    auto selfState = players.getLocalPlayerState();
+    if (selfState.dirty)
+    {
+      for (auto& [peer, id] : peerToId)
+      {
+        sendMessage(peer, MessageType::PLAYER_UPDATE, &selfState.data, sizeof(selfState.data));
+      }
+    }
+
+    players.clearDirtyFlags();
+
+    auto elapsed = steady_clock::now() - start;
+    if (elapsed < interval)
+      std::this_thread::sleep_for(interval - elapsed);
+  }
+}
+
+void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
   u32 players_addr = s_symbolDB.GetSymbolFromName("s_acmp_players_list")->address;
-  std::lock_guard<std::mutex> lk(m_inbound_mutex);
-  for (int i = 0; i < MAX_PLAYERS; i++)
-  {
-    u32 player = PowerPC::MMU::HostRead_U32(guard, players_addr + (i * 0x4));
-    if (player && !m_inbound_player_updates[i].empty())
-    {
-      // Enable drawing
-      PowerPC::MMU::HostWrite_U8(guard, 0, player + 0x149);
+  for (int i = 0; i < players.getRemotePlayers().size(); ++i) {
+    auto& player = players.getRemotePlayers()[i];
+    u32 player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr + ((i + 1) * 0x4));
 
-      for (auto entry : m_inbound_player_updates[i])
-      {
-        PowerPC::MMU::HostWrite_U32(guard, entry.value, player + entry.addr);
-      }
+    writePositionAngle(guard, player.data.world_position, player_addr + 0x028); 
+    writePositionAngle(guard, player.data.eye_position, player_addr + 0x048); 
 
-      m_inbound_player_updates[i].clear();
-    }
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[0], player_addr + 0x068);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[1], player_addr + 0x06C);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[2], player_addr + 0x070);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.speed, player_addr + 0x074);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.stateBitfield, player_addr + 0x020);
+
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index, player_addr + 0x0D08);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_priority, player_addr + 0x0D0C);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_changed, player_addr + 0x0D10);
   }
+
+  u32 local_player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr);
+
+  readPositionAngle(guard, players.getLocalPlayerState().data.world_position, local_player_addr + 0x028);
+  readPositionAngle(guard, players.getLocalPlayerState().data.eye_position, local_player_addr + 0x048);
+
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x068);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x06C);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x070);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x074);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x020);
+
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D08);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D0C);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D10);
+
+  setSelfState(players.getLocalPlayerState().data);
 }
 
-void ACMPHost::update_outgoing_updates(const Core::CPUThreadGuard& guard)
-{
-  std::lock_guard<std::mutex> lk(m_outbound_mutex);
-  std::shared_lock<std::shared_mutex> player_lk(m_players_mutex);
-
-  u32 host_player_addr =
-      PowerPC::MMU::HostRead_U32(guard, s_symbolDB.GetSymbolFromName("s_primary_player")->address);
-  for (uint32_t i = 0; i < 0x126c; i += 4)
-  {
-    if ((i > 0x394 && i < 0xa18) || (i > 0xcf4 && i < 0xda08))
-    {
-      continue;
-    }
-
-    u32 address = host_player_addr + i;
-    u32 val = PowerPC::MMU::HostRead_U32(guard, address);
-    if (m_host_player_snapshot[i] != val)
-    {
-      m_host_player_updates[i] =  val;
-      m_host_player_snapshot[i] = val;
-    }
-  }
-
-  for (uint32_t i = 0; i < MOD_HEAP_SIZE; i += 4)
-  {
-    u32 address = MOD_HEAP_BASE + i;
-    u32 val = PowerPC::MMU::HostRead_U32(guard, address);
-    if (m_memory_snapshot[i] != val)
-    {
-      m_outbound_updates[address] = val;
-      m_memory_snapshot[i] = val;
-    }
-
-    if (m_outbound_updates.size() > MOD_SYNC_BUFFER_SZ - 0x8)
-    {
-      break;
-    }
-  }
-}
-
-void ACMPHost::recv_task()
-{
-  char buffer[MOD_SYNC_BUFFER_SZ];
-  int n;
-
-  while (m_sockfd)
-  {
-    struct sockaddr_in client_addr;
-    int addr_sz = sizeof(client_addr);
-    memset(&client_addr, 0, sizeof(client_addr));
-
-    n = recvfrom(m_sockfd, buffer, sizeof(PlayerUpdate), 0, (struct sockaddr*)&client_addr, &addr_sz);
-    if (n < 1)
-    {
-      if (!m_sockfd)
-      {
-        break;
-      }
-
-      continue;
-    }
-
-    std::shared_ptr<RemotePlayer> player = nullptr;
-    std::shared_lock lk(m_players_mutex);
-
-    for (std::shared_ptr<RemotePlayer> p : m_remote_players)
-    {
-      if (memcmp(&client_addr, &p->peer_addr, sizeof(SOCKADDR_IN)) == 0)
-      {
-        player = p;
-        break;
-      }
-    }
-
-    if (!player)
-    {
-      // we must release the read lock to upgrade to a write lock, then we downgrade again
-      lk.unlock();
-
-      std::unique_lock lk2(m_players_mutex);
-      std::shared_ptr<RemotePlayer> new_player = std::make_shared<RemotePlayer>();
-      new_player->peer_addr = client_addr;
-      player = new_player;
-      m_remote_players.push_back(new_player);
-      lk2.unlock();
-
-      lk.lock();
-
-      OSD::AddMessage("A new player has connected..");
-    }
-
-    //n = recvfrom(m_sockfd, buffer, (char*) type, 0, (struct sockaddr*) &client_addr, &addr_sz);
-    // PacketType* type = (PacketType*)buffer;
-    PlayerUpdate* update_msg = (PlayerUpdate*)buffer;
-    u16 count = update_msg->count;
-
-    // todo, pick slot based on manager using ip address table
-    u8 slot = update_msg->player;
-    if (count > MOD_SYNC_BUFFER_SZ || count == 0)
-    {
-      ASSERT_MSG(CORE, 0, "Received invalid payload size from client");
-      lk.unlock();
-      break;
-    }
-
-    n = recvfrom(m_sockfd, buffer, (count * sizeof(AddrUpdate)), 0, (struct sockaddr*)&client_addr, &addr_sz);
-
-    std::lock_guard<std::mutex> lk2(player->inbound_updates_mutex);
-    std::lock_guard<std::mutex> lk3(m_inbound_mutex);
-    for (int i = 0; i < count; i++)
-    {
-      AddrUpdate* update = (AddrUpdate*) &buffer[i * sizeof(AddrUpdate)];
-      player->inbound_updates.push_back(*update);
-      m_inbound_player_updates[slot].push_back(*update);
-    }
-
-    lk.unlock();
-  }
-}
-
-void ACMPHost::sender_task()
-{
-  int n = 0;
-  while (m_sockfd)
-  {
-    std::unique_lock<std::mutex> lk(m_outbound_mutex);
-    std::shared_lock lk2(m_players_mutex);
-
-    char buffer[MOD_SYNC_BUFFER_SZ];
-    PacketType world_packet = PacketType::kWorldUpdate;
-    while (!m_outbound_updates.empty())
-    {
-      int count = 0;
-      serialize_map<u32>(buffer, &count, m_outbound_updates);
-
-      WorldUpdate world_update;
-      world_update.count = count;
-      for (auto player : m_remote_players)
-      {
-        n = sendto(m_sockfd, (char*)&world_packet, sizeof(world_packet), 0,
-                   (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        if (n < 1)
-        {
-          if (!m_sockfd)
-          {
-            return;
-          }
-
-          continue;
-        }
-
-        n = sendto(m_sockfd, (char*)&world_update, sizeof(world_update), 0,
-                   (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, buffer, world_update.count * sizeof(AddrUpdate), 0,
-               (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-      }
-    }
-
-    PacketType player_packet = PacketType::kPlayerUpdate;
-    for (auto player : m_remote_players)
-    {
-      for (int i = 0; i < m_remote_players.size(); i++)
-      {
-        std::shared_ptr<RemotePlayer> other_player = m_remote_players[i];
-        if (memcmp(&player->peer_addr, &other_player->peer_addr, sizeof(SOCKADDR_IN)) == 0)
-        {
-          continue;
-        }
-
-        PlayerUpdate player_update;
-        player_update.player = i + 1;
-
-        std::lock_guard<std::mutex> lk3(other_player->inbound_updates_mutex);
-        player_update.count = (u16)other_player->inbound_updates.size();
-
-        sendto(m_sockfd, (char*)&player_packet, sizeof(player_packet), 0,
-               (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0,
-               (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, (char*)other_player->inbound_updates.data(), player_update.count * sizeof(AddrUpdate), 0,
-               (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-
-        other_player->inbound_updates.clear();
-      }
-
-      m_outbound_updates.clear();
-    }
-
-    PlayerUpdate player_update;
-    player_update.player = 0;
-    while (!m_host_player_updates.empty())
-    {
-      int count = 0;
-      serialize_map<u16>(buffer, &count, m_host_player_updates);
-
-      player_update.count = count;
-      for (auto player : m_remote_players)
-      {
-        sendto(m_sockfd, (char*)&player_packet, sizeof(player_packet), 0,
-               (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0,
-                 (sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-        sendto(m_sockfd, buffer, player_update.count * sizeof(AddrUpdate), 0,
-               (struct sockaddr*)&player->peer_addr, sizeof(player->peer_addr));
-      }
-    }
-
-    m_host_player_updates.clear();
-
-    lk.unlock();
-    lk2.unlock();
-
-    using namespace std::chrono_literals;
-    std::this_thread::sleep_for(33ms);
-  }
-}
 }  // namespace ACMP

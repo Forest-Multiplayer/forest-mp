@@ -1,56 +1,47 @@
 #pragma once
 
 #include "ACMPCommon.h"
+#include "Playerlist.h"
 
 #include "Core/Core.h"
 
-#include <thread>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
 #include <unordered_map>
-#include <WinSock2.h>
 
 namespace ACMP
 {
-struct RemotePlayer
-{
-  sockaddr_in peer_addr;
-  std::vector<AddrUpdate> inbound_updates;
-  std::mutex inbound_updates_mutex;
-};
-
-class ACMPHost
+class Host
 {
 public:
-  void host_sync_server();
+  bool init(uint16_t port);
+  void start();
+  void stop();
   void shutdown();
 
-  void update(const Core::CPUThreadGuard& guard);
-  void handle_incoming_updates(const Core::CPUThreadGuard& guard);
-  void update_outgoing_updates(const Core::CPUThreadGuard& guard);
+  void setSelfState(const PlayerUpdatePayload& update);
 
-  void recv_task();
-  void sender_task();
+  void frameAdvance(const Core::CPUThreadGuard& guard);
 
 private:
-  int m_sockfd = 0;
-  bool m_shutdown = false;
+  ENetHost* server = nullptr;
+  std::unordered_map<ENetPeer*, std::string> peerToId;
 
-  std::vector<std::shared_ptr<RemotePlayer>> m_remote_players;
-  std::shared_mutex m_players_mutex;
+  std::thread pollThread;
+  std::thread broadcastThread;
+  std::atomic<bool> running{false};
+  std::atomic<bool> broadcasting{false};
 
-  std::thread m_recv_thread;
-  std::mutex m_inbound_mutex;
-  std::vector<AddrUpdate> m_inbound_updates;
-  std::vector<AddrUpdate> m_inbound_player_updates[MAX_PLAYERS];
+  PlayerList players;
+  std::mutex stateMutex;
 
-  std::thread m_send_thread;
-  std::mutex m_outbound_mutex;
-  std::unordered_map<u32, u32> m_outbound_updates;
+  void pollLoop();
+  void broadcastLoop();
 
-  uint32_t m_memory_snapshot[MOD_HEAP_SIZE];
-
-  uint32_t m_host_player_snapshot[0x126c];
-  std::unordered_map<u16, u32> m_host_player_updates;
+  void handleMessage(ENetEvent& event, const Message* msg);
+  void handleIdentify(ENetPeer* peer, const IdentifyPayload* payload);
+  void handleSpawnRequest(ENetPeer* peer);
+  void handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update);
 };
 }  // namespace ACMP

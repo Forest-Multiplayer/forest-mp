@@ -16,8 +16,8 @@
 namespace ACMP
 {
   bool s_initialized = false;
-  ACMPHost* s_server = nullptr;
-  ACMPClient* s_client = nullptr;
+  Host* s_server = nullptr;
+  Client* s_client = nullptr;
   PPCSymbolDB s_symbolDB;
 
   void run_mod(const Core::CPUThreadGuard& guard)
@@ -36,12 +36,12 @@ namespace ACMP
 
     if (s_server)
     {
-      s_server->update(guard);
+      s_server->frameAdvance(guard);
     }
 
     if (s_client)
     {
-      s_client->update(guard);
+      s_client->frameAdvance(guard);
     }
   }
 
@@ -54,7 +54,8 @@ namespace ACMP
 
     if (s_client)
     {
-      s_client->shutdown();
+      s_client->stop();
+      s_client->disconnect();
     }
 
     s_server = nullptr;
@@ -67,7 +68,10 @@ namespace ACMP
   {
     if (!s_server)
     {
-      s_server = new ACMPHost();
+      s_server = new Host();
+      s_server->init(4404);
+      s_server->start();
+
       return true;
     }
 
@@ -77,7 +81,10 @@ namespace ACMP
   bool start_client()
   {
     if (!s_client) {
-      s_client = new ACMPClient();
+      s_client = new Client();
+      s_client->connect("loaclhost", 4404, "player2");
+      s_client->start();
+
       return true;
     }
 

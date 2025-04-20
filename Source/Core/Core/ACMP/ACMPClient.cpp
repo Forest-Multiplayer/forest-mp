@@ -4,223 +4,138 @@
 #include <Common/Assert.h>
 #include <Core/Config/MainSettings.h>
 #include <Core/PowerPC/MMU.h>
+#include <enet/enet.h>
+#include <iostream>
+#include <cstring>
 
-namespace ACMP
-{
-void ACMPClient::connect_to_sync_server()
-{
-  if ((m_sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-  {
-    ASSERT_MSG(CORE, 0, "Could not establish client. Is the port already in use?");
-    return;
-  }
+namespace ACMP {
+bool Client::connect(const std::string& host, uint16_t port, const std::string& id) {
+    if (enet_initialize() != 0) return false;
 
-  memset(&m_host_addr, 0, sizeof(m_host_addr));
+    client = enet_host_create(nullptr, 1, 2, 0, 0);
+    if (!client) return false;
 
-  m_host_addr.sin_family = AF_INET;
-  m_host_addr.sin_addr.s_addr = inet_addr(Config::Get(Config::ACMP_IP).c_str());
-  m_host_addr.sin_port = htons(Config::Get(Config::ACMP_PORT));
+    ENetAddress address;
+    enet_address_set_host(&address, host.c_str());
+    address.port = port;
 
-  m_recv_thread = std::thread([=] { recv_task(); });
-  m_send_thread = std::thread([=] { sender_task(); });
+    peer = enet_host_connect(client, &address, 2, 0);
+    if (!peer) return false;
+
+    ENetEvent event;
+    if (enet_host_service(client, &event, 5000) > 0 &&
+        event.type == ENET_EVENT_TYPE_CONNECT) {
+        IdentifyPayload payload{};
+        std::strncpy(payload.id, id.c_str(), sizeof(payload.id) - 1);
+        std::strncpy(payload.name, id.c_str(), sizeof(payload.name) - 1); // use id as name for now
+        sendMessage(peer, MessageType::IDENTIFY, &payload, sizeof(payload));
+
+        players.setLocalPlayerId(id);
+        return true;
+    }
+
+    return false;
 }
 
-void ACMPClient::shutdown()
-{
-  if (m_shutdown || !m_sockfd)
-  {
-    return;
-  }
-
-  closesocket(m_sockfd);
-  m_sockfd = 0;
-  m_shutdown = true;
-
-  m_recv_thread.join();
-  m_send_thread.join();
+void Client::disconnect() {
+    stop();
+    if (peer) enet_peer_disconnect(peer, 0);
+    if (client) {
+        enet_host_destroy(client);
+        client = nullptr;
+        enet_deinitialize();
+    }
 }
 
-void ACMPClient::update_outbound_buffer(const Core::CPUThreadGuard& guard)
-{
-  std::unique_lock<std::mutex> lk(m_outbound_mutex);
-  u32 host_player_addr =
-      PowerPC::MMU::HostRead_U32(guard, s_symbolDB.GetSymbolFromName("s_primary_player")->address);
-
-  for (uint32_t i = 0; i < 0x126c; i += 4)
-  {
-    if ((i > 0x394 && i < 0xa18) || (i > 0xcf4 && i < 0xda08))
-    {
-      continue;
+void Client::sendPlayerUpdate(const PlayerUpdatePayload& update) {
+    if (peer) {
+        sendMessage(peer, MessageType::PLAYER_UPDATE, &update, sizeof(update));
     }
-
-    u32 address = host_player_addr + i;
-    u32 val = PowerPC::MMU::HostRead_U32(guard, address);
-    if (m_player_snapshot[i] != val)
-    {
-      m_player_updates[i] = val;
-      m_player_snapshot[i] = val;
-    }
-  }
 }
 
-void ACMPClient::write_inbound_updates(const Core::CPUThreadGuard& guard)
-{
-  u32 players_addr = s_symbolDB.GetSymbolFromName("s_acmp_players_list")->address;
-  std::lock_guard<std::mutex> lk(m_inbound_mutex);
-  for (int i = 0; i < MAX_PLAYERS; i++)
-  {
-    u32 player = PowerPC::MMU::HostRead_U32(guard, players_addr + (i * 0x4)); 
-    if (player && !m_inbound_player_updates[i].empty())
-    { 
-      // Enable drawing
-      PowerPC::MMU::HostWrite_U8(guard, 0, player + 0x149);
-
-      for (auto entry : m_inbound_player_updates[i])
-      {
-        PowerPC::MMU::HostWrite_U32(guard, entry.value, player + entry.addr);
-      }
-
-      m_inbound_player_updates[i].clear();
-    }
-  }
-
-  for (auto entry : m_inbound_world_updates)
-  {
-    PowerPC::MMU::HostWrite_U32(guard, entry.value, entry.addr);
-  }
-
-  m_inbound_world_updates.clear();
+void Client::start() {
+    if (!client || running) return;
+    running = true;
+    pollThread = std::thread(&Client::pollLoop, this);
 }
 
-void ACMPClient::update(const Core::CPUThreadGuard& guard)
-{
-  if (m_shutdown)
-  {
-    return;
-  }
-
-  if (!m_sockfd)
-  {
-    connect_to_sync_server();
-  }
-
-  PowerPC::MMU::HostWrite_U8(guard, 1,
-                             s_symbolDB.GetSymbolFromName("s_networking_started")->address);
-
-  update_outbound_buffer(guard);
-  write_inbound_updates(guard);
+void Client::stop() {
+    running = false;
+    if (pollThread.joinable()) pollThread.join();
 }
 
-void ACMPClient::recv_task()
-{
-  char buffer[MOD_SYNC_BUFFER_SZ];
-  int n;
-  while (m_sockfd)
-  {
-    int addr_sz = sizeof(m_host_addr);
-    n = recvfrom(m_sockfd, buffer, 1, 0, (struct sockaddr*) &m_host_addr, &addr_sz);
-    if (n < 1)
-    {
-      if (!m_sockfd)
-      {
-        break;
-      }
-
-      continue;
-    }
-
-    std::lock_guard<std::mutex> lk(m_inbound_mutex);
-
-    switch (static_cast<PacketType>(buffer[0]))
-    {
-    case kPlayerUpdate:
-    {
-      n = recvfrom(m_sockfd, buffer, sizeof(PlayerUpdate), 0, (struct sockaddr*)&m_host_addr, &addr_sz);
-      PlayerUpdate* update = (PlayerUpdate*) buffer;
-      u16 count = update->count;
-      u8 player_id = update->player;
-
-      if (update->count > MOD_SYNC_BUFFER_SZ)
-      {
-        ASSERT_MSG(CORE, 0, "Received invalid payload size from client");
-        break;
-      }
-
-      n = recvfrom(m_sockfd, buffer, (count * sizeof(AddrUpdate)), 0, (struct sockaddr*)&m_host_addr,
-                   &addr_sz);
-      for (int i = 0; i < count; i++)
-      {
-        m_inbound_player_updates[player_id].push_back(
-            *(AddrUpdate*)&buffer[i * sizeof(AddrUpdate)]);
-      }
-
-      break;
-    }
-    case kWorldUpdate:
-    {
-      n = recvfrom(m_sockfd, buffer, sizeof(WorldUpdate), 0, (struct sockaddr*)&m_host_addr, &addr_sz);
-      WorldUpdate* update = (WorldUpdate*) buffer;
-      u16 count = update->count;
-      if (update->count > MOD_SYNC_BUFFER_SZ)
-      {
-        ASSERT_MSG(CORE, 0, "Received invalid payload size from host");
-        break;
-      }
-
-      n = recvfrom(m_sockfd, buffer, (count * sizeof(AddrUpdate)), 0, (struct sockaddr*)&m_host_addr,
-                   &addr_sz);
-      for (int i = 0; i < count; i++)
-      {
-        m_inbound_world_updates.push_back(
-            *(AddrUpdate*)&buffer[i * sizeof(AddrUpdate)]);
-      }
-
-      break;
-    }
-    default:
-      break;
-    }
-  }
-}
-
-void ACMPClient::sender_task()
-{
-  int n;
-  while (m_sockfd)
-  {
-    std::unique_lock<std::mutex> lk(m_outbound_mutex);
-
-    PlayerUpdate player_update;
-    player_update.player = 0;
-
-    char buffer[MOD_SYNC_BUFFER_SZ];
-    while (!m_player_updates.empty())
-    {
-      int count = 0;
-      serialize_map<u16>(buffer, &count, m_player_updates);
-
-      player_update.count = count;
-      n = sendto(m_sockfd, (char*)&player_update, sizeof(player_update), 0, (sockaddr*)&m_host_addr,
-             sizeof(m_host_addr));
-      if (n < 1)
-      {
-        if (!m_sockfd)
-        {
-          break;
+void Client::pollLoop() {
+    ENetEvent event;
+    while (running) {
+        while (enet_host_service(client, &event, 10) > 0) {
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+                const Message* msg = reinterpret_cast<Message*>(event.packet->data);
+                handleMessage(msg);
+                enet_packet_destroy(event.packet);
+            }
         }
-
-        continue;
-      }
-
-      sendto(m_sockfd, buffer, count * sizeof(AddrUpdate), 0,
-             (struct sockaddr*)&m_host_addr, sizeof(m_host_addr));
     }
-
-    lk.unlock();
-
-    m_player_updates.clear();
-    using namespace std::chrono_literals;
-    std::this_thread::sleep_for(33ms);
-  }
 }
-}  // namespace ACMP
+
+void Client::handleMessage(const Message* msg) {
+    switch (static_cast<MessageType>(msg->type)) {
+        case MessageType::SPAWN_ACCEPTED:
+            handleSpawnAccepted(reinterpret_cast<const SpawnData*>(msg->data));
+            break;
+        case MessageType::PLAYER_UPDATE:
+            handlePlayerUpdate(reinterpret_cast<const PlayerUpdatePayload*>(msg->data));
+            break;
+        default:
+            break;
+    }
+}
+
+void Client::handleSpawnAccepted(const SpawnData* data) {
+//   u32 players_addr = s_symbolDB.GetSymbolFromName("s_acmp_players_list")->address;
+//   u32 local_player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr);
+//   writePositionAngle(guard, player.data.world_position, player_addr + 0x028); 
+}
+
+void Client::handlePlayerUpdate(const PlayerUpdatePayload* update) {
+    players.updateFromPayload(*update);
+}
+
+void Client::frameAdvance(const Core::CPUThreadGuard& guard) {
+  u32 players_addr = s_symbolDB.GetSymbolFromName("s_acmp_players_list")->address;
+  for (int i = 0; i < players.getRemotePlayers().size(); ++i) {
+    auto& player = players.getRemotePlayers()[i];
+    u32 player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr + ((i + 1) * 0x4));
+
+    writePositionAngle(guard, player.data.world_position, player_addr + 0x028); 
+    writePositionAngle(guard, player.data.eye_position, player_addr + 0x048); 
+
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[0], player_addr + 0x068);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[1], player_addr + 0x06C);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[2], player_addr + 0x070);
+    PowerPC::MMU::HostWrite_F32(guard, player.data.speed, player_addr + 0x074);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.stateBitfield, player_addr + 0x020);
+
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index, player_addr + 0x0D08);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_priority, player_addr + 0x0D0C);
+    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_changed, player_addr + 0x0D10);
+  }
+
+  u32 local_player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr);
+
+  readPositionAngle(guard, players.getLocalPlayerState().data.world_position, local_player_addr + 0x028);
+  readPositionAngle(guard, players.getLocalPlayerState().data.eye_position, local_player_addr + 0x048);
+
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x068);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x06C);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x070);
+  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x074);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x020);
+
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D08);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D0C);
+  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D10);
+
+  sendPlayerUpdate(players.getLocalPlayerState().data);
+}
+
+} // namespace ACMP

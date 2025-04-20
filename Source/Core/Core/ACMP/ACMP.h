@@ -21,7 +21,4 @@ void write_elf(const Core::CPUThreadGuard& guard);
 
 void bl_to_symbol(const Core::CPUThreadGuard& guard, u32 addr, std::string_view symbol);
 void b_to_symbol(const Core::CPUThreadGuard& guard, u32 addr, std::string_view symbol);
-
-ACMPHost* host();
-ACMPClient* client();
 }

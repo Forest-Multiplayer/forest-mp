@@ -1,46 +1,43 @@
 #pragma once
 
 #include "ACMPCommon.h"
+#include "Playerlist.h"
 
 #include "Core/Core.h"
 
-#include <thread>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
-#include <WinSock2.h>
 
 struct AddrUpdate;
 
 namespace ACMP
 {
-class ACMPClient
+class Client
 {
 public:
-  void connect_to_sync_server();
-  void shutdown();
+  bool connect(const std::string& host, uint16_t port, const std::string& id);
+  void disconnect();
+  void sendPlayerUpdate(const PlayerUpdatePayload& update);
+  void start();
+  void stop();
 
-  void update_outbound_buffer(const Core::CPUThreadGuard& guard);
-  void write_inbound_updates(const Core::CPUThreadGuard& guard);
+  void frameAdvance(const Core::CPUThreadGuard& guard);
 
-  void update(const Core::CPUThreadGuard& guard);
-  void recv_task();
-  void sender_task();
+  PlayerList& getPlayers() { return players; }
 
 private:
-  int m_sockfd = 0;
-  bool m_shutdown = false;
+  ENetHost* client = nullptr;
+  ENetPeer* peer = nullptr;
 
-  sockaddr_in m_host_addr;
+  std::thread pollThread;
+  std::atomic<bool> running{false};
 
-  std::mutex m_inbound_mutex;
-  std::mutex m_outbound_mutex;
+  PlayerList players;
 
-  std::thread m_recv_thread;
-  std::thread m_send_thread;
-
-  uint32_t m_player_snapshot[0x126c];
-  std::unordered_map<u16, uint32_t> m_player_updates;
-  std::vector<AddrUpdate> m_inbound_world_updates;
-  std::vector<AddrUpdate> m_inbound_player_updates[MAX_PLAYERS];
+  void pollLoop();
+  void handleMessage(const Message* msg);
+  void handleSpawnAccepted(const SpawnData* data);
+  void handlePlayerUpdate(const PlayerUpdatePayload* update);
 };
 }  // namespace ACMP
