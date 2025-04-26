@@ -12,6 +12,7 @@
 #include "Core/Config/NetplaySettings.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
+#include "Core/ACMP/ACMPCommon.h"
 
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/AbstractPipeline.h"
@@ -270,6 +271,8 @@ void OnScreenUI::DrawImGui()
 // Create On-Screen-Messages
 void OnScreenUI::DrawDebugText()
 {
+  ImGui::Text(ACMP::DebugText.c_str());
+
   const bool show_movie_window =
       Config::Get(Config::MAIN_SHOW_FRAME_COUNT) || Config::Get(Config::MAIN_SHOW_LAG) ||
       Config::Get(Config::MAIN_MOVIE_SHOW_INPUT_DISPLAY) ||

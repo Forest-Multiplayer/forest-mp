@@ -549,14 +549,16 @@ add_library(core
   WiiRoot.h
   WiiUtils.cpp
   WiiUtils.h
-  Core/ACMP/ACMP.cpp
-  Core/ACMP/ACMP.h
-  Core/ACMP/ACMPClient.cpp
-  Core/ACMP/ACMPClient.h
-  Core/ACMP/ACMPHost.cpp
-  Core/ACMP/ACMPHost.h
-  Core/ACMP/ACMPCommon.h
-  Core/ACMP/Playerlist.h
+  ACMP/ACMP.cpp
+  ACMP/ACMP.h
+  ACMP/ACMPClient.cpp
+  ACMP/ACMPClient.h
+  ACMP/ACMPHost.cpp
+  ACMP/ACMPHost.h
+  ACMP/ACMPCommon.h
+  ACMP/ACMPCommon.cpp
+  ACMP/Playerlist.h
+  ACMP/Playerlist.cpp
 )
 
 if(_M_X86_64)

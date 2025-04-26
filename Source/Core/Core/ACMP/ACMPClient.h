@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ACMPCommon.h"
 #include "Playerlist.h"
 
 #include "Core/Core.h"
@@ -9,7 +8,12 @@
 #include <thread>
 #include <unordered_map>
 
-struct AddrUpdate;
+#include <enet/enet.h>
+
+class PlayerList;
+class PlayerUpdatePayload;
+class SpawnData;
+class Message;
 
 namespace ACMP
 {
@@ -24,16 +28,15 @@ public:
 
   void frameAdvance(const Core::CPUThreadGuard& guard);
 
-  PlayerList& getPlayers() { return players; }
-
 private:
   ENetHost* client = nullptr;
   ENetPeer* peer = nullptr;
+  ENetAddress address;
 
   std::thread pollThread;
   std::atomic<bool> running{false};
 
-  PlayerList players;
+  Playerlist* players = nullptr;
 
   void pollLoop();
   void handleMessage(const Message* msg);

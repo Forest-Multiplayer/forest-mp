@@ -390,8 +390,8 @@ void CodeWidget::UpdateSymbols()
       item->setSelected(true);
 
     // Disable non-function symbols as you can't do anything with them.
-    if (symbol.second.type != Common::Symbol::Type::Function)
-      item->setFlags(Qt::NoItemFlags);
+    // if (symbol.second.type != Common::Symbol::Type::Function)
+    //   item->setFlags(Qt::NoItemFlags);
 
     item->setData(Qt::UserRole, symbol.second.address);
 

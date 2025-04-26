@@ -3,12 +3,7 @@
 #include "Core/Core.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 
-#include "ACMPClient.h"
-#include "ACMPHost.h"
-
 namespace ACMP {
-extern PPCSymbolDB s_symbolDB;
-
 void run_mod(const Core::CPUThreadGuard& guard);
 void shutdown();
 

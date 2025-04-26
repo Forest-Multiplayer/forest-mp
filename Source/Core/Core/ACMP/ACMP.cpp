@@ -1,7 +1,14 @@
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+
 #include "ACMP.h"
+
+#include "ACMPClient.h"
+#include "ACMPHost.h"
 
 #include "Common/SymbolDB.h"
 #include "Common/FileUtil.h"
+
 #include "Core/Boot/ElfReader.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 #include "Core/PowerPC/Gekko.h"
@@ -18,7 +25,6 @@ namespace ACMP
   bool s_initialized = false;
   Host* s_server = nullptr;
   Client* s_client = nullptr;
-  PPCSymbolDB s_symbolDB;
 
   void run_mod(const Core::CPUThreadGuard& guard)
   {
@@ -69,7 +75,7 @@ namespace ACMP
     if (!s_server)
     {
       s_server = new Host();
-      s_server->init(4404);
+      s_server->init("host", 4404);
       s_server->start();
 
       return true;
@@ -82,7 +88,8 @@ namespace ACMP
   {
     if (!s_client) {
       s_client = new Client();
-      s_client->connect("loaclhost", 4404, "player2");
+      
+      s_client->connect("localhost", 4404, fmt::format("player-{}", random()));
       s_client->start();
 
       return true;
@@ -105,7 +112,7 @@ namespace ACMP
     PowerPC::MMU::HostWrite_U32(guard, 0x4e800020, 0x80374a9c);  // blr
 
     bl_to_symbol(guard, 0x80375d50, "acmp_select_free");
-    bl_to_symbol(guard, 0x8062aaa8, "acmp_Game_play_Reset_destiny_hook");
+    // bl_to_symbol(guard, 0x8062aaa8, "acmp_Game_play_Reset_destiny_hook");
 
     bl_to_symbol(guard, 0x80374dc0, "acmp_spawn_player_actors");
 
@@ -149,13 +156,14 @@ namespace ACMP
     if (elf_file.IsValid())
     {
       elf_file.LoadIntoMemory(Core::System::GetInstance(), false);
-      elf_file.LoadSymbols(guard, s_symbolDB);
+      elf_file.LoadSymbols(guard, symbolDb(), "acmp-symbols");
+      
     }
   }
 
   void bl_to_symbol(const Core::CPUThreadGuard& guard, u32 addr, std::string_view symbol)
   {
-    u32 bl = 0x48000001 | (s_symbolDB.GetSymbolFromName(symbol)->address - addr);
+    u32 bl = 0x48000001 | (symbolDb().GetSymbolFromName(symbol)->address - addr);
 
     PowerPC::MMU::HostWrite_U32(guard, bl, addr);
     Core::System::GetInstance().GetPowerPC().ScheduleInvalidateCacheThreadSafe(addr);
@@ -163,20 +171,10 @@ namespace ACMP
 
   void b_to_symbol(const Core::CPUThreadGuard& guard, u32 addr, std::string_view symbol)
   {
-    u32 b = 0x48000000 | (s_symbolDB.GetSymbolFromName(symbol)->address - addr);
+    u32 b = 0x48000000 | (symbolDb().GetSymbolFromName(symbol)->address - addr);
 
     PowerPC::MMU::HostWrite_U32(guard, b, addr);
     Core::System::GetInstance().GetPowerPC().ScheduleInvalidateCacheThreadSafe(addr);
-  }
-
-  ACMPHost* host()
-  {
-    return s_server;
-  }
-
-  ACMPClient* client()
-  { 
-    return s_client;
   }
 }
 

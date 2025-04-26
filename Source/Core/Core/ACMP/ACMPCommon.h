@@ -1,9 +1,13 @@
 #pragma once
 
 #include <Common/CommonTypes.h>
+#include <unordered_map>
+#include <mutex>
 #include <enet/enet.h>
 
-#include <unordered_map>
+#include "Core/PowerPC/PPCSymbolDB.h"
+
+#define SYMBOL_DB 
 
 #define MOD_HEAP_BASE 0x81808000
 #define MOD_HEAP_SIZE 0x818FFFFF - MOD_HEAP_BASE  // ~1MB
@@ -13,10 +17,17 @@
 namespace ACMP
 {
 
+class Playerlist;
+
+extern std::string DebugText; 
+PPCSymbolDB& symbolDb();
+
+// Player ID size constraint
+static constexpr size_t kPlayerIdSize = 16;
+
+
 using f32 = float;
 using s16 = int16_t;
-
-static constexpr size_t kPlayerIdSize = 64;
 
 struct xyz_t
 {
@@ -34,25 +45,6 @@ struct PositionAngle
   s_xyz angle;
 };
 
-void writePositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr)
-{
-  PowerPC::MMU::HostWrite_F32(guard, pos.position.x, base_addr + 0x000);
-  PowerPC::MMU::HostWrite_F32(guard, pos.position.y, base_addr + 0x004);
-  PowerPC::MMU::HostWrite_F32(guard, pos.position.z, base_addr + 0x008);
-  PowerPC::MMU::HostWrite_U16(guard, pos.angle.x, base_addr + 0x00C);
-  PowerPC::MMU::HostWrite_U16(guard, pos.angle.y, base_addr + 0x010);
-  PowerPC::MMU::HostWrite_U16(guard, pos.angle.z, base_addr + 0x014);
-}
-
-void readPositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr)
-{
-  pos.position.x = PowerPC::MMU::HostRead_F32(guard, base_addr + 0x000);
-  pos.position.y = PowerPC::MMU::HostRead_F32(guard, base_addr + 0x004);
-  pos.position.z = PowerPC::MMU::HostRead_F32(guard, base_addr + 0x008);
-  pos.angle.x = PowerPC::MMU::HostRead_U16(guard, base_addr + 0x00C);
-  pos.angle.y = PowerPC::MMU::HostRead_U16(guard, base_addr + 0x010);
-  pos.angle.z = PowerPC::MMU::HostRead_U16(guard, base_addr + 0x014);
-}
 
 enum class MessageType : uint8_t
 {
@@ -83,6 +75,7 @@ struct SpawnData
   float rotation;
 };
 
+#pragma pack(1)
 struct PlayerUpdatePayload
 {
   char id[kPlayerIdSize];
@@ -90,21 +83,32 @@ struct PlayerUpdatePayload
   PositionAngle eye_position;
   f32 velocity[3];
   f32 speed;
+  s_xyz shape_angle;
+  s8 block_x;
+  s8 block_y;
   uint32_t stateBitfield;
   int32_t requested_main_index;
   int32_t requested_main_index_priority;
   int32_t requested_main_index_changed;
+  int32_t animation0_idx;
+  int32_t animation1_idx;
+  int32_t part_table_idx;
 };
 
-inline void sendMessage(ENetPeer* peer, MessageType type, const void* data, size_t size)
-{
-  Message msg;
-  msg.type = static_cast<uint8_t>(type);
-  std::memset(msg.data, 0, sizeof(msg.data));
-  std::memcpy(msg.data, data, size);
+struct PendingPacket {
+  ENetPeer* peer;
+  std::vector<uint8_t> data;
+};
 
-  ENetPacket* packet = enet_packet_create(&msg, sizeof(Message), ENET_PACKET_FLAG_RELIABLE);
-  enet_peer_send(peer, 0, packet);
-  enet_host_flush(peer->host);
-}
+extern std::vector<PendingPacket> s_msg_queue;
+extern std::mutex s_msg_queue_mutex;
+
+void sendMessage(ENetPeer* peer, MessageType type, const void* data, size_t size);
+void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players);
+void readPositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr);
+void writePositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr);
+
+void readSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr);
+void writeSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr);
+
 }  // namespace ACMP

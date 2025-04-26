@@ -1,5 +1,10 @@
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+
 #include "ACMPHost.h"
 #include "ACMP.h"
+#include "ACMPCommon.h"
+#include "Playerlist.h"
 
 #include "Common/Assert.h"
 #include "Core/PowerPC/MMU.h"
@@ -11,10 +16,12 @@
 
 namespace ACMP
 {
-bool Host::init(uint16_t port)
+bool Host::init(std::string local_name, uint16_t port)
 {
   if (enet_initialize() != 0)
     return false;
+
+  players = new Playerlist(local_name, local_name);
 
   ENetAddress address;
   address.host = ENET_HOST_ANY;
@@ -55,12 +62,6 @@ void Host::shutdown()
   }
 }
 
-void Host::setSelfState(const PlayerUpdatePayload& update)
-{
-  std::lock_guard<std::mutex> lock(stateMutex);
-  players.updateFromPayload(update);
-}
-
 void Host::pollLoop()
 {
   ENetEvent event;
@@ -70,21 +71,37 @@ void Host::pollLoop()
     {
       if (event.type == ENET_EVENT_TYPE_RECEIVE)
       {
+        if (!event.packet) {
+          continue;
+        }
+
         const Message* msg = reinterpret_cast<Message*>(event.packet->data);
         handleMessage(event, msg);
         enet_packet_destroy(event.packet);
-      }
-      else if (event.type == ENET_EVENT_TYPE_DISCONNECT)
-      {
-        std::lock_guard<std::mutex> lock(stateMutex);
-        auto it = peerToId.find(event.peer);
-        if (it != peerToId.end())
-        {
-          players.removePlayerById(it->second);
-          peerToId.erase(it);
+      } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+        if (players) {
+          players->removePlayer(event.peer);
         }
+
+        enet_packet_destroy(event.packet);
       }
     }
+    
+    std::lock_guard<std::mutex> lock(s_msg_queue_mutex);
+    for (auto& pending : s_msg_queue)
+    {
+      if (pending.peer && pending.peer->state != ENET_PEER_STATE_CONNECTED)
+      {
+        continue;
+      }
+
+      auto sz = sizeof(Message);
+      ENetPacket* packet = enet_packet_create(pending.data.data(), sz, ENET_PACKET_FLAG_RELIABLE);
+      enet_peer_send(pending.peer, 0, packet);
+      enet_host_flush(pending.peer->host);
+    }
+
+    s_msg_queue.clear();
   }
 }
 
@@ -94,6 +111,7 @@ void Host::handleMessage(ENetEvent& event, const Message* msg)
   {
   case MessageType::IDENTIFY:
     handleIdentify(event.peer, reinterpret_cast<const IdentifyPayload*>(msg->data));
+    OSD::AddMessage("Peer joined: " + std::string(reinterpret_cast<const IdentifyPayload*>(msg->data)->id));
     break;
   case MessageType::SPAWN_REQUEST:
     handleSpawnRequest(event.peer);
@@ -109,21 +127,16 @@ void Host::handleMessage(ENetEvent& event, const Message* msg)
 void Host::handleIdentify(ENetPeer* peer, const IdentifyPayload* payload)
 {
   std::string id(payload->id);
-  peerToId[peer] = id;
-  players.bindPeerToId(id, peer);
+  players->addPlayer(peer, payload->id, payload->name);
   std::cout << "IDENTIFY received from " << id << "\n";
 }
 
 void Host::handleSpawnRequest(ENetPeer* peer)
 {
-  auto it = peerToId.find(peer);
-  if (it == peerToId.end())
-    return;
-
   SpawnData spawn {
-    players.getLocalPlayerState().data.world_position.position.x,
-    players.getLocalPlayerState().data.world_position.position.y,
-    players.getLocalPlayerState().data.world_position.position.z,
+    players->getLocalPlayerState()->world_position.position.x,
+    players->getLocalPlayerState()->world_position.position.y,
+    players->getLocalPlayerState()->world_position.position.z,
     90.0f
   };
 
@@ -132,12 +145,8 @@ void Host::handleSpawnRequest(ENetPeer* peer)
 
 void Host::handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update)
 {
-  auto it = peerToId.find(peer);
-  if (it == peerToId.end())
-    return;
-
   std::lock_guard<std::mutex> lock(stateMutex);
-  players.updateFromPayload(*update);
+  players->updatePlayer(*update);
 }
 
 void Host::broadcastLoop()
@@ -149,30 +158,30 @@ void Host::broadcastLoop()
   {
     auto start = steady_clock::now();
 
-    std::lock_guard<std::mutex> lock(stateMutex);
-
-    auto updates = players.getRemotePlayers();
-    for (const auto& state : updates)
     {
-      if (state.dirty)
+      std::lock_guard<std::mutex> lock(stateMutex);
+
+      auto peers = players->getRemotePlayers();
+      for (const auto& player : peers)
       {
-        for (auto& [peer, id] : peerToId)
+        if (player.dirty)
         {
-          sendMessage(peer, MessageType::PLAYER_UPDATE, &state.data, sizeof(state.data));
+          for (auto& other_player : peers)
+          {
+            if (player.peer == other_player.peer)
+              continue;
+
+            sendMessage(other_player.peer, MessageType::PLAYER_UPDATE, &player.state, sizeof(PlayerUpdatePayload));
+          }
         }
+
+        auto state = players->getLocalPlayerState();
+        sendMessage(player.peer, MessageType::PLAYER_UPDATE, state, sizeof(PlayerUpdatePayload));
       }
     }
 
-    auto selfState = players.getLocalPlayerState();
-    if (selfState.dirty)
-    {
-      for (auto& [peer, id] : peerToId)
-      {
-        sendMessage(peer, MessageType::PLAYER_UPDATE, &selfState.data, sizeof(selfState.data));
-      }
-    }
 
-    players.clearDirtyFlags();
+    players->clearDirtyFlags();
 
     auto elapsed = steady_clock::now() - start;
     if (elapsed < interval)
@@ -181,41 +190,35 @@ void Host::broadcastLoop()
 }
 
 void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
-  u32 players_addr = s_symbolDB.GetSymbolFromName("s_acmp_players_list")->address;
-  for (int i = 0; i < players.getRemotePlayers().size(); ++i) {
-    auto& player = players.getRemotePlayers()[i];
-    u32 player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr + ((i + 1) * 0x4));
 
-    writePositionAngle(guard, player.data.world_position, player_addr + 0x028); 
-    writePositionAngle(guard, player.data.eye_position, player_addr + 0x048); 
+  std::stringstream ss;
+  ss << "HOST\n";
 
-    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[0], player_addr + 0x068);
-    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[1], player_addr + 0x06C);
-    PowerPC::MMU::HostWrite_F32(guard, player.data.velocity[2], player_addr + 0x070);
-    PowerPC::MMU::HostWrite_F32(guard, player.data.speed, player_addr + 0x074);
-    PowerPC::MMU::HostWrite_U32(guard, player.data.stateBitfield, player_addr + 0x020);
-
-    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index, player_addr + 0x0D08);
-    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_priority, player_addr + 0x0D0C);
-    PowerPC::MMU::HostWrite_U32(guard, player.data.requested_main_index_changed, player_addr + 0x0D10);
+  if (players == nullptr) {
+    return;
   }
 
-  u32 local_player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr);
+  sync_game_memory(guard, *players);
 
-  readPositionAngle(guard, players.getLocalPlayerState().data.world_position, local_player_addr + 0x028);
-  readPositionAngle(guard, players.getLocalPlayerState().data.eye_position, local_player_addr + 0x048);
+  for (auto& player : players->getRemotePlayers()) {
+    ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player.state.id), 
+                      player.state.world_position.position.x,
+                      player.state.world_position.position.y,
+                      player.state.world_position.position.z);
+  }
+    
+  u32 local_player_addr =
+      PowerPC::MMU::HostRead_U32(guard, symbolDb().GetSymbolFromName("s_primary_player")->address);
 
-  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x068);
-  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x06C);
-  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x070);
-  PowerPC::MMU::HostRead_F32(guard, local_player_addr + 0x074);
-  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x020);
+  PlayerUpdatePayload* local_state = players->getLocalPlayerState();
+  ss << fmt::format("Local Player ({}):\n {}, {}, {}\n", local_player_addr, 
+                  local_state->world_position.position.x,
+                  local_state->world_position.position.y,
+                  local_state->world_position.position.z);
 
-  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D08);
-  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D0C);
-  PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0D10);
-
-  setSelfState(players.getLocalPlayerState().data);
+  DebugText = ss.str();
 }
 
 }  // namespace ACMP
+
+#pragma GCC pop_options
