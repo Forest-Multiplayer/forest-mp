@@ -29,6 +29,7 @@
 #include "Core/Core.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/System.h"
+#include "Core/ACMP/ACMP.h"
 
 #include "DolphinQt/Host.h"
 #include "DolphinQt/MainWindow.h"
@@ -164,6 +165,12 @@ int main(int argc, char* argv[])
 #ifdef _WIN32
   FreeConsole();
 #endif
+
+  if (options.get("server")) {
+    ACMP::start_host();
+  } else if (options.get("client")) {
+    ACMP::start_client();
+  }
 
   UICommon::SetUserDirectory(static_cast<const char*>(options.get("user")));
   UICommon::CreateDirectories();

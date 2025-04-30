@@ -150,8 +150,20 @@ void Client::handleMessage(const Message* msg)
   case MessageType::PLAYER_UPDATE:
     handlePlayerUpdate(reinterpret_cast<const PlayerUpdatePayload*>(msg->data));
     break;
+  case MessageType::WORLD_UPDATE:
+    handleWorldUpdate(*reinterpret_cast<const std::vector<AddrUpdate>*>(msg->data));
   default:
     break;
+  }
+}
+
+void Client::handleWorldUpdate(const std::vector<AddrUpdate> updates)
+{
+  for (const auto& update : updates)
+  {
+    auto& s = s_world_snapshot.snapshot[update.addr];
+    s.val = update.val;
+    s.dirty = true;
   }
 }
 
@@ -173,6 +185,7 @@ void Client::frameAdvance(const Core::CPUThreadGuard& guard)
   ss << "CLIENT\n";
 
   sync_game_memory(guard, *players);
+  apply_world_snapshot(guard);
 
   for (auto& player : players->getRemotePlayers())
   {

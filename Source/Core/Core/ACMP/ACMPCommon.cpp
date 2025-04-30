@@ -12,6 +12,9 @@ namespace ACMP
 std::vector<PendingPacket> s_msg_queue;
 std::mutex s_msg_queue_mutex;
 
+WorldSnapshot s_world_snapshot;
+std::mutex s_world_snapshot_mutex;
+
 std::string DebugText;
 
 PPCSymbolDB& symbolDb()
@@ -139,4 +142,26 @@ void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players)
   local_state->part_table_idx = PowerPC::MMU::HostRead_U32(guard, local_player_addr + 0x0DBC);
 }
 
+void record_world_snapshot(const Core::CPUThreadGuard& guard) {
+  std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
+  for (u32 addr = MOD_HEAP_BASE; addr < MOD_HEAP_BASE + MOD_HEAP_SIZE; addr += 0x4) {
+    u32 val = PowerPC::MMU::HostRead_U32(guard, addr);
+    SyncVal& s = s_world_snapshot.snapshot[addr];
+    if (s.val != val) {
+      s.val = val;
+      s.dirty = true;
+    }
+  }
+}
+
+void apply_world_snapshot(const Core::CPUThreadGuard& guard) {
+  std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
+  for (auto& update : s_world_snapshot.snapshot) {
+    if (!update.second.dirty)
+      continue;
+
+    PowerPC::MMU::HostWrite_U32(guard, update.second.val, update.first);
+    update.second.dirty = false;
+  }
+}
 }  // namespace ACMP

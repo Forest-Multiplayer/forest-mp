@@ -125,6 +125,12 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
       .choices({"HLE", "LLE"})
       .help("Choose audio emulation from [%choices]");
 
+  parser->add_option("-c", "--client")
+      .action("store_true");
+
+  parser->add_option("-sv", "--server")
+      .action("store_true");
+
   return parser;
 }
 

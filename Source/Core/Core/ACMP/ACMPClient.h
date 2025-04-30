@@ -42,5 +42,6 @@ private:
   void handleMessage(const Message* msg);
   void handleSpawnAccepted(const SpawnData* data);
   void handlePlayerUpdate(const PlayerUpdatePayload* update);
+  void handleWorldUpdate(const std::vector<AddrUpdate> updates);
 };
 }  // namespace ACMP

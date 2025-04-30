@@ -157,6 +157,18 @@ void Host::broadcastLoop()
   while (broadcasting)
   {
     auto start = steady_clock::now();
+    std::vector<AddrUpdate> world_updates;
+    {
+      std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
+      for (auto& update : s_world_snapshot.snapshot)
+      {
+        if (!update.second.dirty)
+          continue;
+
+        world_updates.push_back({update.first, update.second.val});
+        update.second.dirty = false;
+      }
+    }
 
     {
       std::lock_guard<std::mutex> lock(stateMutex);
@@ -177,6 +189,9 @@ void Host::broadcastLoop()
 
         auto state = players->getLocalPlayerState();
         sendMessage(player.peer, MessageType::PLAYER_UPDATE, state, sizeof(PlayerUpdatePayload));
+
+        // world sync
+        sendMessage(player.peer, MessageType::WORLD_UPDATE, &world_updates, sizeof(std::vector<AddrUpdate>) + (sizeof(AddrUpdate) * world_updates.size()));
       }
     }
 
@@ -199,6 +214,7 @@ void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
   }
 
   sync_game_memory(guard, *players);
+  record_world_snapshot(guard);
 
   for (auto& player : players->getRemotePlayers()) {
     ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player.state.id), 

@@ -16,6 +16,8 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 
+#include <iostream>
+
 #define ID_ADDR 0x80003100
 #define ID_VAL 0x7c0802a6
 #define CURR_FRAME_ADDR 0x812f31d4
@@ -37,6 +39,7 @@ namespace ACMP
     if (!s_initialized)
     {
       init_mod(guard);
+      s_initialized = true;
       return;
     }
 
@@ -103,31 +106,31 @@ namespace ACMP
     setup_bat();
     write_elf(guard);
 
-    PowerPC::MMU::HostWrite_U32(guard, 0x7C832378, 0x803756ec);  // mr r3, r4
-    bl_to_symbol(guard, 0x803756f0, "acmp_select_malloc");
+    // PowerPC::MMU::HostWrite_U32(guard, 0x7C832378, 0x803756ec);  // mr r3, r4
+    // bl_to_symbol(guard, 0x803756f0, "acmp_select_malloc");
 
-    bl_to_symbol(guard, 0x803756a4, "acmp_malloc");
+    // bl_to_symbol(guard, 0x803756a4, "acmp_malloc");
 
-    PowerPC::MMU::HostWrite_U32(guard, 0x38600001, 0x80374a98);  // li r3, 1
-    PowerPC::MMU::HostWrite_U32(guard, 0x4e800020, 0x80374a9c);  // blr
+    // PowerPC::MMU::HostWrite_U32(guard, 0x38600001, 0x80374a98);  // li r3, 1
+    // PowerPC::MMU::HostWrite_U32(guard, 0x4e800020, 0x80374a9c);  // blr
 
-    bl_to_symbol(guard, 0x80375d50, "acmp_select_free");
-    // bl_to_symbol(guard, 0x8062aaa8, "acmp_Game_play_Reset_destiny_hook");
+    // bl_to_symbol(guard, 0x80375d50, "acmp_select_free");
+    // // bl_to_symbol(guard, 0x8062aaa8, "acmp_Game_play_Reset_destiny_hook");
 
-    bl_to_symbol(guard, 0x80374dc0, "acmp_spawn_player_actors");
+    // bl_to_symbol(guard, 0x80374dc0, "acmp_spawn_player_actors");
 
-    bl_to_symbol(guard, 0x804e6bdc, "acmp_main_walk_stand_controller_hook");
-    bl_to_symbol(guard, 0x804e6038, "acmp_main_walk_stand_controller_hook");
+    // bl_to_symbol(guard, 0x804e6bdc, "acmp_main_walk_stand_controller_hook");
+    // bl_to_symbol(guard, 0x804e6038, "acmp_main_walk_stand_controller_hook");
 
-    b_to_symbol(guard, 0x803d9728, "acmp_get_player_without_check");
+    // b_to_symbol(guard, 0x803d9728, "acmp_get_player_without_check");
 
-    bl_to_symbol(guard, 0x8037e0bc, "acmp_get_primary_player");
-    bl_to_symbol(guard, 0x8038022c, "acmp_get_primary_player");
-    bl_to_symbol(guard, 0x80380e40, "acmp_get_primary_player");
-    bl_to_symbol(guard, 0x803827d8, "acmp_get_primary_player");
+    // bl_to_symbol(guard, 0x8037e0bc, "acmp_get_primary_player");
+    // bl_to_symbol(guard, 0x8038022c, "acmp_get_primary_player");
+    // bl_to_symbol(guard, 0x80380e40, "acmp_get_primary_player");
+    // bl_to_symbol(guard, 0x803827d8, "acmp_get_primary_player");
 
-    // if you disable the panic code, then your game cant break anymore
-    PowerPC::MMU::HostWrite_U32(guard, 0x8005a8a0, 0x60000000);
+    // // if you disable the panic code, then your game cant break anymore
+    // PowerPC::MMU::HostWrite_U32(guard, 0x8005a8a0, 0x60000000);
 
     s_initialized = true;
   }
@@ -155,7 +158,7 @@ namespace ACMP
 
     if (elf_file.IsValid())
     {
-      elf_file.LoadIntoMemory(Core::System::GetInstance(), false);
+      // elf_file.LoadIntoMemory(Core::System::GetInstance(), false);
       elf_file.LoadSymbols(guard, symbolDb(), "acmp-symbols");
       
     }

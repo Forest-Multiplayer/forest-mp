@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Common/CommonTypes.h>
+
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 #include <enet/enet.h>
 
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -52,13 +54,16 @@ enum class MessageType : uint8_t
   CHAT = 1,
   SPAWN_REQUEST = 2,
   SPAWN_ACCEPTED = 3,
-  PLAYER_UPDATE = 4
+  PLAYER_UPDATE = 4,
+  WORLD_UPDATE = 5,
 };
 
+#define MSG_SZ 1 + 2
 struct Message
 {
   uint8_t type;
-  uint8_t data[254];
+  uint16_t sz;
+  uint8_t data[MOD_SYNC_BUFFER_SZ];
 };
 
 struct IdentifyPayload
@@ -95,13 +100,34 @@ struct PlayerUpdatePayload
   int32_t part_table_idx;
 };
 
+struct SyncVal {
+  bool dirty;
+  u32 val;
+};
+
+struct AddrUpdate {
+  u32 addr;
+  u32 val;
+};
+
+struct WorldSnapshot {
+  std::map<u32, SyncVal> snapshot;
+};
+
 struct PendingPacket {
   ENetPeer* peer;
   std::vector<uint8_t> data;
 };
 
+struct WorldSyncPayload {
+  uint16_t len;
+  AddrUpdate updates[];
+};
+
 extern std::vector<PendingPacket> s_msg_queue;
 extern std::mutex s_msg_queue_mutex;
+extern WorldSnapshot s_world_snapshot;
+extern std::mutex s_world_snapshot_mutex;
 
 void sendMessage(ENetPeer* peer, MessageType type, const void* data, size_t size);
 void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players);
@@ -111,4 +137,6 @@ void writePositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u
 void readSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr);
 void writeSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr);
 
+void record_world_snapshot(const Core::CPUThreadGuard& guard);
+void apply_world_snapshot(const Core::CPUThreadGuard& guard);
 }  // namespace ACMP
