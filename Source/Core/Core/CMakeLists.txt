@@ -798,3 +798,6 @@ if(USE_RETRO_ACHIEVEMENTS)
   target_compile_definitions(core PUBLIC -DUSE_RETRO_ACHIEVEMENTS)
   target_compile_definitions(core PUBLIC -DRC_CLIENT_SUPPORTS_HASH)
 endif()
+
+
+target_compile_options(core PUBLIC -fexceptions)

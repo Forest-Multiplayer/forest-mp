@@ -32,10 +32,13 @@ bool Client::connect(const std::string& host, uint16_t port, const std::string& 
   if (enet_host_service(client, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
   {
     IdentifyPayload payload{};
-    std::strncpy(payload.id, id.c_str(), sizeof(payload.id) - 1);
-    std::strncpy(payload.name, id.c_str(), sizeof(payload.name) - 1);
+    payload.id = players->getLocalPlayerState()->id;
+    payload.name = payload.id;
 
-    sendMessage(peer, MessageType::IDENTIFY, &payload, sizeof(payload));
+    std::vector<uint8_t> data;
+    serialize_identify(payload, data);
+
+    sendMessage(peer, MessageType::IDENTIFY, data.data(), data.size());
 
     return true;
   }
@@ -95,8 +98,7 @@ void Client::pollLoop()
           continue;
         }
 
-        const Message* msg = reinterpret_cast<Message*>(event.packet->data);
-        handleMessage(msg);
+        handleMessage(event, event.packet->data, event.packet->dataLength);
         enet_packet_destroy(event.packet);
       }
       else if (event.type == ENET_EVENT_TYPE_DISCONNECT)
@@ -107,11 +109,13 @@ void Client::pollLoop()
       else if (event.type == ENET_EVENT_TYPE_CONNECT)
       {
         IdentifyPayload payload{};
-        std::string id = std::string(players->getLocalPlayerState()->id);
-        std::strncpy(payload.id, id.c_str(), sizeof(payload.id) - 1);
-        std::strncpy(payload.name, id.c_str(), sizeof(payload.name) - 1);
+        payload.id = std::string(players->getLocalPlayerState()->id);
+        payload.name = payload.id;
 
-        sendMessage(peer, MessageType::IDENTIFY, &payload, sizeof(payload));
+        std::vector<uint8_t> data;
+        serialize_identify(payload, data);
+
+        sendMessage(peer, MessageType::IDENTIFY, data.data(), data.size());
         enet_packet_destroy(event.packet);
       }
     }
@@ -140,22 +144,21 @@ void Client::pollLoop()
   }
 }
 
-void Client::handleMessage(const Message* msg)
+void Client::handleMessage(ENetEvent& event, enet_uint8* data, size_t len)
 {
-  switch (static_cast<MessageType>(msg->type))
+  switch (static_cast<MessageType>(data[0]))
   {
   case MessageType::SPAWN_ACCEPTED:
-    handleSpawnAccepted(reinterpret_cast<const SpawnData*>(msg->data));
+    // handleSpawnAccepted(reinterpret_cast<const SpawnData*>(&data[1]));
     break;
   case MessageType::PLAYER_UPDATE:
-    handlePlayerUpdate(reinterpret_cast<const PlayerUpdatePayload*>(msg->data));
+    handlePlayerUpdate(reinterpret_cast<const PlayerUpdatePayload*>(&data[1]));
     break;
-  case MessageType::WORLD_UPDATE:
-    handleWorldUpdate(*reinterpret_cast<const std::vector<AddrUpdate>*>(msg->data));
   default:
     break;
   }
 }
+
 
 void Client::handleWorldUpdate(const std::vector<AddrUpdate> updates)
 {
@@ -197,9 +200,10 @@ void Client::frameAdvance(const Core::CPUThreadGuard& guard)
 
   u32 local_player_addr =
       PowerPC::MMU::HostRead_U32(guard, symbolDb().GetSymbolFromName("s_primary_player")->address);
-  PlayerUpdatePayload* local_state = players->getLocalPlayerState();
 
-  sendMessage(peer, MessageType::PLAYER_UPDATE, local_state, sizeof(PlayerUpdatePayload));
+  PlayerUpdatePayload* local_state = players->getLocalPlayerState();
+  std::vector<uint8_t> buffer;
+  sendMessage(peer, MessageType::PLAYER_UPDATE, buffer.data(), buffer.size());
 
   ss << fmt::format("Local Player ({}):\n {}, {}, {}\n", local_player_addr,
                     local_state->world_position.position.x, local_state->world_position.position.y,

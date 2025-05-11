@@ -773,6 +773,8 @@ if (USE_RETRO_ACHIEVEMENTS)
 	add_subdirectory(Externals/rcheevos)
 endif()
 
+include_directories(Externals/cereal/include)
+
 ########################################
 # Pre-build events: Define configuration variables and write SCM info header
 #

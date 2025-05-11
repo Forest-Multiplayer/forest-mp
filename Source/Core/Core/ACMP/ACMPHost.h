@@ -40,7 +40,7 @@ private:
   void pollLoop();
   void broadcastLoop();
 
-  void handleMessage(ENetEvent& event, const Message* msg);
+  void handleMessage(ENetEvent& event, uint8_t* msg, size_t len);
   void handleIdentify(ENetPeer* peer, const IdentifyPayload* payload);
   void handleSpawnRequest(ENetPeer* peer);
   void handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update);

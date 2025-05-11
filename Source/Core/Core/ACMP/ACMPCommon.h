@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <vector>
+#include <iostream>
 #include <enet/enet.h>
 
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -63,13 +64,12 @@ struct Message
 {
   uint8_t type;
   uint16_t sz;
-  uint8_t data[MOD_SYNC_BUFFER_SZ];
 };
 
 struct IdentifyPayload
 {
-  char id[64];
-  char name[128];
+  std::string id;
+  std::string name;
 };
 
 struct SpawnData
@@ -83,7 +83,7 @@ struct SpawnData
 #pragma pack(1)
 struct PlayerUpdatePayload
 {
-  char id[kPlayerIdSize];
+  std::string id;
   PositionAngle world_position;
   PositionAngle eye_position;
   f32 velocity[3];
@@ -121,7 +121,7 @@ struct PendingPacket {
 
 struct WorldSyncPayload {
   uint16_t len;
-  AddrUpdate updates[];
+  std::vector<AddrUpdate> updates;
 };
 
 extern std::vector<PendingPacket> s_msg_queue;
@@ -139,4 +139,12 @@ void writeSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr);
 
 void record_world_snapshot(const Core::CPUThreadGuard& guard);
 void apply_world_snapshot(const Core::CPUThreadGuard& guard);
+
+void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint8_t>& buffer);
+void serialize_world_update(const WorldSyncPayload& updates, std::vector<uint8_t>& buffer);
+void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer);
+
+void deserialize_player_update(std::vector<uint8_t>& buffer, PlayerUpdatePayload& update);
+void deserialize_world_update(std::vector<uint8_t>& buffer, WorldSyncPayload& updates);
+void deserialize_identify(std::vector<uint8_t>& buffer, IdentifyPayload& id);
 }  // namespace ACMP

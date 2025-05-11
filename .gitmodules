@@ -84,3 +84,6 @@
 [submodule "Externals/Vulkan-Headers"]
 	path = Externals/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "Externals/cereal"]
+	path = Externals/cereal
+	url = git@github.com:USCiLab/cereal.git

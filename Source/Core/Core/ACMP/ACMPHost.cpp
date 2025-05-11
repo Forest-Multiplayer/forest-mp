@@ -1,6 +1,3 @@
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
-
 #include "ACMPHost.h"
 #include "ACMP.h"
 #include "ACMPCommon.h"
@@ -75,8 +72,7 @@ void Host::pollLoop()
           continue;
         }
 
-        const Message* msg = reinterpret_cast<Message*>(event.packet->data);
-        handleMessage(event, msg);
+        handleMessage(event, event.packet->data, event.packet->dataLength);
         enet_packet_destroy(event.packet);
       } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
         if (players) {
@@ -105,19 +101,19 @@ void Host::pollLoop()
   }
 }
 
-void Host::handleMessage(ENetEvent& event, const Message* msg)
+void Host::handleMessage(ENetEvent& event, enet_uint8* data, size_t len)
 {
-  switch (static_cast<MessageType>(msg->type))
+  switch (static_cast<MessageType>(data[0]))
   {
   case MessageType::IDENTIFY:
-    handleIdentify(event.peer, reinterpret_cast<const IdentifyPayload*>(msg->data));
-    OSD::AddMessage("Peer joined: " + std::string(reinterpret_cast<const IdentifyPayload*>(msg->data)->id));
+    handleIdentify(event.peer, reinterpret_cast<const IdentifyPayload*>(&data[1]));
+    OSD::AddMessage("Peer joined: " + std::string(reinterpret_cast<const IdentifyPayload*>(&data[1])->id));
     break;
   case MessageType::SPAWN_REQUEST:
     handleSpawnRequest(event.peer);
     break;
   case MessageType::PLAYER_UPDATE:
-    handlePlayerUpdate(event.peer, reinterpret_cast<const PlayerUpdatePayload*>(msg->data));
+    handlePlayerUpdate(event.peer, reinterpret_cast<const PlayerUpdatePayload*>(&data[1]));
     break;
   default:
     break;
@@ -126,9 +122,8 @@ void Host::handleMessage(ENetEvent& event, const Message* msg)
 
 void Host::handleIdentify(ENetPeer* peer, const IdentifyPayload* payload)
 {
-  std::string id(payload->id);
   players->addPlayer(peer, payload->id, payload->name);
-  std::cout << "IDENTIFY received from " << id << "\n";
+  std::cout << "IDENTIFY received from " << payload->id << "\n";
 }
 
 void Host::handleSpawnRequest(ENetPeer* peer)
@@ -140,7 +135,7 @@ void Host::handleSpawnRequest(ENetPeer* peer)
     90.0f
   };
 
-  sendMessage(peer, MessageType::SPAWN_ACCEPTED, &spawn, sizeof(spawn));
+  // sendMessage(peer, MessageType::SPAWN_ACCEPTED, &spawn, sizeof(spawn));
 }
 
 void Host::handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update)
@@ -183,15 +178,20 @@ void Host::broadcastLoop()
             if (player.peer == other_player.peer)
               continue;
 
-            sendMessage(other_player.peer, MessageType::PLAYER_UPDATE, &player.state, sizeof(PlayerUpdatePayload));
+            std::vector<uint8_t> player_update_buffer;
+            serialize_player_update(other_player.state, player_update_buffer);
+            sendMessage(player.peer, MessageType::PLAYER_UPDATE, player_update_buffer.data(), player_update_buffer.size());
           }
         }
 
         auto state = players->getLocalPlayerState();
-        sendMessage(player.peer, MessageType::PLAYER_UPDATE, state, sizeof(PlayerUpdatePayload));
 
-        // world sync
-        sendMessage(player.peer, MessageType::WORLD_UPDATE, &world_updates, sizeof(std::vector<AddrUpdate>) + (sizeof(AddrUpdate) * world_updates.size()));
+        std::vector<uint8_t> player_update_buffer;
+        serialize_player_update(*state, player_update_buffer);
+        sendMessage(player.peer, MessageType::PLAYER_UPDATE, player_update_buffer.data(), player_update_buffer.size());
+
+        // // world sync
+        // sendMessage(player.peer, MessageType::WORLD_UPDATE, &world_updates, sizeof(std::vector<AddrUpdate>) + (sizeof(AddrUpdate) * world_updates.size()));
       }
     }
 
@@ -236,5 +236,3 @@ void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
 }
 
 }  // namespace ACMP
-
-#pragma GCC pop_options

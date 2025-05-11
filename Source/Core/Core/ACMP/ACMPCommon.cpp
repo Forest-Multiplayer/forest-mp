@@ -7,6 +7,12 @@
 
 #include "Playerlist.h"
 
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/map.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/types/complex.hpp>
+
 namespace ACMP
 {
 std::vector<PendingPacket> s_msg_queue;
@@ -52,22 +58,18 @@ void readSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr)
   xyz.z = PowerPC::MMU::HostRead_U16(guard, base_addr + 0x004);
 }
 
-void sendMessage(ENetPeer* peer, MessageType type, const void* data, size_t size)
+void sendMessage(ENetPeer* peer, MessageType type, std::vector<uint8_t> data, size_t size)
 {
   if (!peer || peer->state != ENET_PEER_STATE_CONNECTED)
   {
     return;
   }
 
-  Message msg;
-  msg.type = static_cast<uint8_t>(type);
-  std::memset(msg.data, 0, sizeof(msg.data));
-  std::memcpy(msg.data, data, size);
+  data.emplace(data.begin(), static_cast<uint8_t>(type));
 
   PendingPacket pending;
   pending.peer = peer;
-  pending.data = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&msg),
-                            reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg));
+  pending.data = data;
 
   std::lock_guard<std::mutex> lock(s_msg_queue_mutex);
   s_msg_queue.push_back(pending);
@@ -163,5 +165,84 @@ void apply_world_snapshot(const Core::CPUThreadGuard& guard) {
     PowerPC::MMU::HostWrite_U32(guard, update.second.val, update.first);
     update.second.dirty = false;
   }
+}
+
+void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint8_t>& buffer) {
+  std::stringstream ss;
+  {
+    cereal::BinaryOutputArchive oarchive(ss);
+    oarchive(update.id,
+             update.animation0_idx,
+             update.animation1_idx,
+             update.part_table_idx,
+             update.requested_main_index,
+             update.requested_main_index_priority,
+             update.requested_main_index_changed,
+             update.stateBitfield,
+             update.block_x,
+             update.block_y,
+             update.velocity,
+             update.speed,
+             update.world_position,
+             update.eye_position,
+             update.shape_angle);
+
+  }
+
+  std::string str_buffer = ss.str();
+  buffer.resize(str_buffer.size());
+  memcpy(buffer.data(), str_buffer.data(), str_buffer.size());
+}
+
+void serialize_world_update(const WorldSyncPayload& updates, std::vector<uint8_t>& buffer) {
+
+}
+
+void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer) {
+  std::stringstream ss;
+  {
+    cereal::BinaryOutputArchive oarchive(ss);
+    oarchive(id.id, id.name);
+  }
+
+  std::string str_buffer = ss.str();
+  buffer.resize(str_buffer.size());
+  memcpy(buffer.data(), str_buffer.data(), str_buffer.size());
+}
+
+void deserialize_player_update(std::vector<uint8_t>& buffer, PlayerUpdatePayload& update) {
+  std::stringstream ss;
+  ss.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  ss.flush();
+
+  cereal::BinaryInputArchive iarchive(ss);
+  iarchive(update.id,
+            update.animation0_idx,
+            update.animation1_idx,
+            update.part_table_idx,
+            update.requested_main_index,
+            update.requested_main_index_priority,
+            update.requested_main_index_changed,
+            update.stateBitfield,
+            update.block_x,
+            update.block_y,
+            update.velocity,
+            update.speed,
+            update.world_position,
+            update.eye_position,
+            update.shape_angle);
+}
+
+void deserialize_world_update(std::vector<uint8_t>& buffer, WorldSyncPayload& updates) {
+
+}
+
+void deserialize_identify(std::vector<uint8_t>& buffer, IdentifyPayload& id) {
+  std::stringstream ss;
+  ss.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  ss.flush();
+
+  cereal::BinaryInputArchive oarchive(ss);
+  oarchive(id.id, id.name);
 }
 }  // namespace ACMP
