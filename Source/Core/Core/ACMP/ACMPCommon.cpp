@@ -18,7 +18,10 @@ namespace ACMP
 std::vector<PendingPacket> s_msg_queue;
 std::mutex s_msg_queue_mutex;
 
-WorldSnapshot s_world_snapshot;
+WorldSnapshot s_dirty_snapshot;
+std::mutex s_dirty_snapshot_mutex;
+
+std::vector<u32> s_snapshot_addresses(0x3000000);
 std::mutex s_world_snapshot_mutex;
 
 u32 s_rel_base = 0;
@@ -200,18 +203,17 @@ void record_world_snapshot(const Core::CPUThreadGuard& guard) {
 
       if (entry == allocations_table.end()) {
         // make sure clients know to delete it
-        SyncVal& s = s_world_snapshot.snapshot[actor + 0x15c];
-        s.val = 0;
-        s.dirty = true;
+        s_snapshot_addresses[(actor - 0x80000000) + 0x15c] = 0x0;
       } else {
         for (u32 offset = 0x0; offset < entry->second; offset += 0x4) {
           u32 val = PowerPC::MMU::HostRead_U32(guard, actor + offset);
-          SyncVal& s = s_world_snapshot.snapshot[actor + offset];
-          if (s.val != val) {
-            s.val = val;
-            s.dirty = true;
+          u32& last_val = s_snapshot_addresses[actor + offset - 0x80000000];
+          if (last_val != val) {
+            std::lock_guard<std::mutex> lk(s_dirty_snapshot_mutex);
+            s_dirty_snapshot.dirty_addresses.push_back({actor + offset, val});
           }
 
+          s_snapshot_addresses[actor + offset - 0x80000000] = val;
           addresses_scanned++;
         }
       }
@@ -227,13 +229,11 @@ void record_world_snapshot(const Core::CPUThreadGuard& guard) {
 
 void apply_world_snapshot(const Core::CPUThreadGuard& guard) {
   std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
-  for (auto& update : s_world_snapshot.snapshot) {
-    if (!update.second.dirty)
-      continue;
-
-    PowerPC::MMU::HostWrite_U32(guard, update.second.val, update.first);
-    update.second.dirty = false;
+  for (auto& update : s_dirty_snapshot.dirty_addresses) {
+    PowerPC::MMU::HostWrite_U32(guard, update.val, update.addr);
   }
+
+  s_dirty_snapshot.dirty_addresses.clear();
 }
 
 void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint8_t>& buffer) {

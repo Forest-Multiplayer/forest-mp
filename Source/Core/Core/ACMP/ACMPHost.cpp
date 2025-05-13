@@ -169,15 +169,11 @@ void Host::broadcastLoop()
     auto start = steady_clock::now();
     std::vector<AddrUpdate> world_updates;
     {
-      std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
-      for (auto& update : s_world_snapshot.snapshot)
-      {
-        if (!update.second.dirty)
-          continue;
-
-        world_updates.push_back({update.first, update.second.val});
-        update.second.dirty = false;
-      }
+      std::lock_guard<std::mutex> lk(s_dirty_snapshot_mutex);
+      world_updates.insert(world_updates.end(),
+                           s_dirty_snapshot.dirty_addresses.begin(),
+                           s_dirty_snapshot.dirty_addresses.end());
+      s_dirty_snapshot.dirty_addresses.clear();
     }
 
     {

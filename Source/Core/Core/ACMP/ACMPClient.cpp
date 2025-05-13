@@ -185,12 +185,8 @@ void Client::handleWorldUpdate(const std::vector<AddrUpdate> updates)
   if (updates.empty())
     return;
 
-  for (const auto& update : updates)
-  {
-    auto& s = s_world_snapshot.snapshot[update.addr];
-    s.val = update.val;
-    s.dirty = true;
-  }
+  std::lock_guard<std::mutex> lock(s_dirty_snapshot_mutex);
+  s_dirty_snapshot.dirty_addresses.insert(s_dirty_snapshot.dirty_addresses.end(), updates.begin(), updates.end());
 }
 
 void Client::handleSpawnAccepted(const SpawnData* data)

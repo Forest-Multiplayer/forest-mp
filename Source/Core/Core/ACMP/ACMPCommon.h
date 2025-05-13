@@ -112,7 +112,7 @@ struct AddrUpdate {
 };
 
 struct WorldSnapshot {
-  std::unordered_map<u32, SyncVal> snapshot;
+  std::vector<AddrUpdate> dirty_addresses;
 };
 
 struct PendingPacket {
@@ -183,7 +183,9 @@ void serialize(Archive& ar, PlayerUpdatePayload& v)
 
 extern std::vector<PendingPacket> s_msg_queue;
 extern std::mutex s_msg_queue_mutex;
-extern WorldSnapshot s_world_snapshot;
+extern WorldSnapshot s_dirty_snapshot;
+extern std::mutex s_dirty_snapshot_mutex;
+extern std::vector<u32> s_snapshot_addresses;
 extern std::mutex s_world_snapshot_mutex;
 
 extern u32 s_rel_base;
