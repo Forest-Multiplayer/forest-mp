@@ -21,7 +21,25 @@ std::mutex s_msg_queue_mutex;
 WorldSnapshot s_world_snapshot;
 std::mutex s_world_snapshot_mutex;
 
+u32 s_rel_base = 0;
+u32 s_acmp_players_list = 0;
+u32 s_malloc_entries_len = 0;
+u32 s_malloc_entries = 0;
+u32 s_primary_player = 0;
+u32 s_actor_info = 0;
+bool s_mod_ready = false;
+
 std::string DebugText;
+
+void mod_post_init(const Core::CPUThreadGuard& guard) {
+  s_rel_base = symbolDb().GetSymbolFromName("s_rel_base")->address;
+  s_acmp_players_list = symbolDb().GetSymbolFromName("s_acmp_players_list")->address;
+  s_malloc_entries_len = symbolDb().GetSymbolFromName("s_malloc_entries_len")->address;
+  s_malloc_entries = symbolDb().GetSymbolFromName("s_malloc_entries")->address;
+  s_primary_player = symbolDb().GetSymbolFromName("s_primary_player")->address; 
+  s_actor_info = symbolDb().GetSymbolFromName("s_actor_info")->address;
+  s_mod_ready = true;
+}
 
 PPCSymbolDB& symbolDb()
 {
@@ -58,7 +76,7 @@ void readSXyz(const Core::CPUThreadGuard& guard, s_xyz& xyz, u32 base_addr)
   xyz.z = PowerPC::MMU::HostRead_U16(guard, base_addr + 0x004);
 }
 
-void sendMessage(ENetPeer* peer, MessageType type, std::vector<uint8_t> data, size_t size)
+void sendMessage(ENetPeer* peer, MessageType type, std::vector<uint8_t>& data)
 {
   if (!peer || peer->state != ENET_PEER_STATE_CONNECTED)
   {
@@ -75,37 +93,38 @@ void sendMessage(ENetPeer* peer, MessageType type, std::vector<uint8_t> data, si
   s_msg_queue.push_back(pending);
 }
 
-void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players)
+void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& player_list)
 {
-  u32 players_addr = symbolDb().GetSymbolFromName("s_acmp_players_list")->address;
   u32 idx = 0;
-  for (auto& player : players.getRemotePlayers())
+
+  auto& players = player_list.getRemotePlayers();
+  for (auto& player : player_list.getRemotePlayers())
   {
-    u32 player_addr = PowerPC::MMU::HostRead_U32(guard, players_addr + (idx * 0x4));
+    u32 player_addr = PowerPC::MMU::HostRead_U32(guard, s_acmp_players_list + (idx * 0x4));
 
-    writePositionAngle(guard, player.state.world_position, player_addr + 0x028);
-    writePositionAngle(guard, player.state.eye_position, player_addr + 0x048);
+    writePositionAngle(guard, player->state.world_position, player_addr + 0x028);
+    writePositionAngle(guard, player->state.eye_position, player_addr + 0x048);
 
-    writeSXyz(guard, player.state.shape_angle, player_addr + 0x0DC);
+    writeSXyz(guard, player->state.shape_angle, player_addr + 0x0DC);
 
-    PowerPC::MMU::HostWrite_F32(guard, player.state.velocity[0], player_addr + 0x068);
-    PowerPC::MMU::HostWrite_F32(guard, player.state.velocity[1], player_addr + 0x06C);
-    PowerPC::MMU::HostWrite_F32(guard, player.state.velocity[2], player_addr + 0x070);
-    PowerPC::MMU::HostWrite_F32(guard, player.state.speed, player_addr + 0x074);
-    PowerPC::MMU::HostWrite_U32(guard, player.state.stateBitfield, player_addr + 0x020);
+    PowerPC::MMU::HostWrite_F32(guard, player->state.velocity[0], player_addr + 0x068);
+    PowerPC::MMU::HostWrite_F32(guard, player->state.velocity[1], player_addr + 0x06C);
+    PowerPC::MMU::HostWrite_F32(guard, player->state.velocity[2], player_addr + 0x070);
+    PowerPC::MMU::HostWrite_F32(guard, player->state.speed, player_addr + 0x074);
+    PowerPC::MMU::HostWrite_U32(guard, player->state.stateBitfield, player_addr + 0x020);
 
-    PowerPC::MMU::HostWrite_U8(guard, player.state.block_x, player_addr + 0x008);
-    PowerPC::MMU::HostWrite_U8(guard, player.state.block_y, player_addr + 0x009);
+    PowerPC::MMU::HostWrite_U8(guard, player->state.block_x, player_addr + 0x008);
+    PowerPC::MMU::HostWrite_U8(guard, player->state.block_y, player_addr + 0x009);
 
-    PowerPC::MMU::HostWrite_U32(guard, player.state.requested_main_index, player_addr + 0x0D08);
-    PowerPC::MMU::HostWrite_U32(guard, player.state.requested_main_index_priority,
+    PowerPC::MMU::HostWrite_U32(guard, player->state.requested_main_index, player_addr + 0x0D08);
+    PowerPC::MMU::HostWrite_U32(guard, player->state.requested_main_index_priority,
                                 player_addr + 0x0D0C);
-    PowerPC::MMU::HostWrite_U32(guard, player.state.requested_main_index_changed,
+    PowerPC::MMU::HostWrite_U32(guard, player->state.requested_main_index_changed,
                                 player_addr + 0x0D10);
 
-    PowerPC::MMU::HostWrite_U32(guard, player.state.animation0_idx, player_addr + 0x0DB4);
-    PowerPC::MMU::HostWrite_U32(guard, player.state.animation1_idx, player_addr + 0x0DB8);
-    PowerPC::MMU::HostWrite_U32(guard, player.state.part_table_idx, player_addr + 0x0DBC);
+    PowerPC::MMU::HostWrite_U32(guard, player->state.animation0_idx, player_addr + 0x0DB4);
+    PowerPC::MMU::HostWrite_U32(guard, player->state.animation1_idx, player_addr + 0x0DB8);
+    PowerPC::MMU::HostWrite_U32(guard, player->state.part_table_idx, player_addr + 0x0DBC);
 
     u32 move_func = symbolDb().GetSymbolFromName("acmp_primary_move_hook")->address;
     if (move_func)
@@ -116,9 +135,8 @@ void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players)
     idx++;
   }
 
-  u32 local_player_addr =
-      PowerPC::MMU::HostRead_U32(guard, symbolDb().GetSymbolFromName("s_primary_player")->address);
-  PlayerUpdatePayload* local_state = players.getLocalPlayerState();
+  u32 local_player_addr = PowerPC::MMU::HostRead_U32(guard, s_primary_player);
+  PlayerUpdatePayload* local_state = player_list.getLocalPlayerState();
 
   readPositionAngle(guard, local_state->world_position, local_player_addr + 0x028);
   readPositionAngle(guard, local_state->eye_position, local_player_addr + 0x048);
@@ -145,15 +163,66 @@ void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players)
 }
 
 void record_world_snapshot(const Core::CPUThreadGuard& guard) {
+  std::unordered_map<u32, u32> allocations_table;
+  u32 entries_base = s_malloc_entries;
+  u32 len = PowerPC::MMU::HostRead_U32(guard, s_malloc_entries_len);
+  for (u32 i = 0; i < len; i++) {
+    u32 base =
+        PowerPC::MMU::HostRead_U32(guard, entries_base + (i * 0x8));
+    if (base == 0x0) {
+      continue;
+    }
+
+    u32 size = PowerPC::MMU::HostRead_U32(guard, entries_base + (i * 0x8) + 0x4);
+    allocations_table.emplace(base, size);
+  }
+
   std::lock_guard<std::mutex> lk(s_world_snapshot_mutex);
-  for (u32 addr = MOD_HEAP_BASE; addr < MOD_HEAP_BASE + MOD_HEAP_SIZE; addr += 0x4) {
-    u32 val = PowerPC::MMU::HostRead_U32(guard, addr);
-    SyncVal& s = s_world_snapshot.snapshot[addr];
-    if (s.val != val) {
-      s.val = val;
-      s.dirty = true;
+  u32 actor = 0x0;
+
+  u32 actor_list = PowerPC::MMU::HostRead_U32(guard, s_actor_info);
+  if (actor_list == 0x0) {
+    return;
+  }
+
+  u32 addresses_scanned = 0;
+  u32 entity_count = 0;
+  for (int i = 0; i < ACTOR_PART_NUM; i++) {
+    if (i == 3 /* Player */) {
+      continue;
+    }
+
+    actor = PowerPC::MMU::HostRead_U32(guard, actor_list + 0x8 + (i * 0x8));
+    addresses_scanned++;
+    
+    while (actor != 0) {
+      auto entry = allocations_table.find(actor);
+
+      if (entry == allocations_table.end()) {
+        // make sure clients know to delete it
+        SyncVal& s = s_world_snapshot.snapshot[actor + 0x15c];
+        s.val = 0;
+        s.dirty = true;
+      } else {
+        for (u32 offset = 0x0; offset < entry->second; offset += 0x4) {
+          u32 val = PowerPC::MMU::HostRead_U32(guard, actor + offset);
+          SyncVal& s = s_world_snapshot.snapshot[actor + offset];
+          if (s.val != val) {
+            s.val = val;
+            s.dirty = true;
+          }
+
+          addresses_scanned++;
+        }
+      }
+
+      actor = PowerPC::MMU::HostRead_U32(guard, actor + 0x158);
+      addresses_scanned++;
+      entity_count++;
     }
   }
+
+  std::cout << addresses_scanned << " addresses scanned over " << entity_count << " entitites\n";
 }
 
 void apply_world_snapshot(const Core::CPUThreadGuard& guard) {
@@ -171,22 +240,7 @@ void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint
   std::stringstream ss;
   {
     cereal::BinaryOutputArchive oarchive(ss);
-    oarchive(update.id,
-             update.animation0_idx,
-             update.animation1_idx,
-             update.part_table_idx,
-             update.requested_main_index,
-             update.requested_main_index_priority,
-             update.requested_main_index_changed,
-             update.stateBitfield,
-             update.block_x,
-             update.block_y,
-             update.velocity,
-             update.speed,
-             update.world_position,
-             update.eye_position,
-             update.shape_angle);
-
+    oarchive(update);
   }
 
   std::string str_buffer = ss.str();
@@ -195,14 +249,10 @@ void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint
 }
 
 void serialize_world_update(const WorldSyncPayload& updates, std::vector<uint8_t>& buffer) {
-
-}
-
-void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer) {
   std::stringstream ss;
   {
     cereal::BinaryOutputArchive oarchive(ss);
-    oarchive(id.id, id.name);
+    oarchive(updates);
   }
 
   std::string str_buffer = ss.str();
@@ -210,39 +260,42 @@ void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer)
   memcpy(buffer.data(), str_buffer.data(), str_buffer.size());
 }
 
-void deserialize_player_update(std::vector<uint8_t>& buffer, PlayerUpdatePayload& update) {
+void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer) {
   std::stringstream ss;
-  ss.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  {
+    cereal::BinaryOutputArchive oarchive(ss);
+    oarchive(id);
+  }
+
+  std::string str_buffer = ss.str();
+  buffer.resize(str_buffer.size());
+  memcpy(buffer.data(), str_buffer.data(), str_buffer.size());
+}
+
+void deserialize_player_update(const u8* buffer, size_t buffer_len, PlayerUpdatePayload& update) {
+  std::stringstream ss;
+  ss.write(reinterpret_cast<const char*>(buffer), buffer_len);
   ss.flush();
 
   cereal::BinaryInputArchive iarchive(ss);
-  iarchive(update.id,
-            update.animation0_idx,
-            update.animation1_idx,
-            update.part_table_idx,
-            update.requested_main_index,
-            update.requested_main_index_priority,
-            update.requested_main_index_changed,
-            update.stateBitfield,
-            update.block_x,
-            update.block_y,
-            update.velocity,
-            update.speed,
-            update.world_position,
-            update.eye_position,
-            update.shape_angle);
+  iarchive(update);
 }
 
-void deserialize_world_update(std::vector<uint8_t>& buffer, WorldSyncPayload& updates) {
-
-}
-
-void deserialize_identify(std::vector<uint8_t>& buffer, IdentifyPayload& id) {
+void deserialize_world_update(const u8* buffer, size_t buffer_len, WorldSyncPayload& updates) {
   std::stringstream ss;
-  ss.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  ss.write(reinterpret_cast<const char*>(buffer), buffer_len);
+  ss.flush();
+
+  cereal::BinaryInputArchive iarchive(ss);
+  iarchive(updates);
+}
+
+void deserialize_identify(const u8* buffer, size_t buffer_len, IdentifyPayload& id) {
+  std::stringstream ss;
+  ss.write(reinterpret_cast<const char*>(buffer), buffer_len);
   ss.flush();
 
   cereal::BinaryInputArchive oarchive(ss);
-  oarchive(id.id, id.name);
+  oarchive(id);
 }
 }  // namespace ACMP

@@ -14,8 +14,10 @@
 
 #define MOD_HEAP_BASE 0x81808000
 #define MOD_HEAP_SIZE 0x818FFFFF - MOD_HEAP_BASE  // ~1MB
+#define MOD_EXT_ARENA_SIZE 150000
 #define MOD_SYNC_BUFFER_SZ 65000                  // 100000 / 2
 #define MAX_PLAYERS 2                             // for now
+#define ACTOR_PART_NUM 8
 
 namespace ACMP
 {
@@ -47,7 +49,6 @@ struct PositionAngle
   xyz_t position;
   s_xyz angle;
 };
-
 
 enum class MessageType : uint8_t
 {
@@ -111,7 +112,7 @@ struct AddrUpdate {
 };
 
 struct WorldSnapshot {
-  std::map<u32, SyncVal> snapshot;
+  std::unordered_map<u32, SyncVal> snapshot;
 };
 
 struct PendingPacket {
@@ -120,16 +121,82 @@ struct PendingPacket {
 };
 
 struct WorldSyncPayload {
-  uint16_t len;
   std::vector<AddrUpdate> updates;
 };
+
+template <class Archive>
+void serialize(Archive& ar, AddrUpdate& v)
+{
+    ar(v.addr, v.val);
+}
+
+
+template <class Archive>
+void serialize(Archive& ar, WorldSyncPayload& v)
+{
+    ar(v.updates);
+}
+
+template <class Archive>
+void serialize(Archive& ar, IdentifyPayload& v)
+{
+    ar(v.id, v.name);
+}
+
+template <class Archive>
+void serialize(Archive& ar, xyz_t& v)
+{
+    ar(v.x, v.y, v.z);
+}
+
+template <class Archive>
+void serialize(Archive& ar, s_xyz& v)
+{
+    ar(v.x, v.y, v.z);
+}
+
+template <class Archive>
+void serialize(Archive& ar, PositionAngle& v)
+{
+    ar(v.position, v.angle);
+}
+
+template <class Archive>
+void serialize(Archive& ar, PlayerUpdatePayload& v)
+{
+    ar(v.id,
+       v.world_position,
+       v.eye_position,
+       v.velocity,
+       v.speed,
+       v.shape_angle,
+       v.block_x,
+       v.block_y,
+       v.stateBitfield,
+       v.requested_main_index,
+       v.requested_main_index_priority,
+       v.requested_main_index_changed,
+       v.animation0_idx,
+       v.animation1_idx,
+       v.part_table_idx);
+}
 
 extern std::vector<PendingPacket> s_msg_queue;
 extern std::mutex s_msg_queue_mutex;
 extern WorldSnapshot s_world_snapshot;
 extern std::mutex s_world_snapshot_mutex;
 
-void sendMessage(ENetPeer* peer, MessageType type, const void* data, size_t size);
+extern u32 s_rel_base;
+extern u32 s_acmp_players_list;
+extern u32 s_malloc_entries_len;
+extern u32 s_malloc_entries;
+extern u32 s_primary_player;
+extern u32 s_actor_info;
+extern bool s_mod_ready;
+
+void mod_post_init(const Core::CPUThreadGuard& guard);
+
+void sendMessage(ENetPeer* peer, MessageType type, std::vector<uint8_t>& data);
 void sync_game_memory(const Core::CPUThreadGuard& guard, Playerlist& players);
 void readPositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr);
 void writePositionAngle(const Core::CPUThreadGuard& guard, PositionAngle& pos, u32 base_addr);
@@ -144,7 +211,7 @@ void serialize_player_update(const PlayerUpdatePayload& update, std::vector<uint
 void serialize_world_update(const WorldSyncPayload& updates, std::vector<uint8_t>& buffer);
 void serialize_identify(const IdentifyPayload& id, std::vector<uint8_t>& buffer);
 
-void deserialize_player_update(std::vector<uint8_t>& buffer, PlayerUpdatePayload& update);
-void deserialize_world_update(std::vector<uint8_t>& buffer, WorldSyncPayload& updates);
-void deserialize_identify(std::vector<uint8_t>& buffer, IdentifyPayload& id);
+void deserialize_player_update(const u8* buffer, size_t buffer_len, PlayerUpdatePayload& update);
+void deserialize_world_update(const u8* buffer, size_t buffer_len, WorldSyncPayload& updates);
+void deserialize_identify(const u8* buffer, size_t buffer_len, IdentifyPayload& id);
 }  // namespace ACMP

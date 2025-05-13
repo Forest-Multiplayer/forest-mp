@@ -41,7 +41,7 @@ private:
   void pollLoop();
   void handleMessage(ENetEvent& event, uint8_t* msg, size_t len);
   void handleSpawnAccepted(const SpawnData* data);
-  void handlePlayerUpdate(const PlayerUpdatePayload* update);
+  void handlePlayerUpdate(const PlayerUpdatePayload& update);
   void handleWorldUpdate(const std::vector<AddrUpdate> updates);
 };
 }  // namespace ACMP

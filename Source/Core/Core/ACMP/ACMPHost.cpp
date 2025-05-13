@@ -7,6 +7,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
+#include <cereal/archives/binary.hpp>
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -30,9 +31,9 @@ bool Host::init(std::string local_name, uint16_t port)
 
 void Host::start()
 {
-  if (!server || running)
+  if (!server || running.load())
     return;
-  running = true;
+  running.store(true);
   broadcasting = true;
   pollThread = std::thread(&Host::pollLoop, this);
   broadcastThread = std::thread(&Host::broadcastLoop, this);
@@ -40,7 +41,7 @@ void Host::start()
 
 void Host::stop()
 {
-  running = false;
+  running.store(false);
   broadcasting = false;
   if (pollThread.joinable())
     pollThread.join();
@@ -62,8 +63,12 @@ void Host::shutdown()
 void Host::pollLoop()
 {
   ENetEvent event;
-  while (running)
+  while (running.load())
   {
+    if (!players) {
+      return;
+    }
+
     while (enet_host_service(server, &event, 10) > 0)
     {
       if (event.type == ENET_EVENT_TYPE_RECEIVE)
@@ -91,8 +96,7 @@ void Host::pollLoop()
         continue;
       }
 
-      auto sz = sizeof(Message);
-      ENetPacket* packet = enet_packet_create(pending.data.data(), sz, ENET_PACKET_FLAG_RELIABLE);
+      ENetPacket* packet = enet_packet_create(pending.data.data(), pending.data.size(), ENET_PACKET_FLAG_RELIABLE);
       enet_peer_send(pending.peer, 0, packet);
       enet_host_flush(pending.peer->host);
     }
@@ -103,27 +107,38 @@ void Host::pollLoop()
 
 void Host::handleMessage(ENetEvent& event, enet_uint8* data, size_t len)
 {
-  switch (static_cast<MessageType>(data[0]))
-  {
-  case MessageType::IDENTIFY:
-    handleIdentify(event.peer, reinterpret_cast<const IdentifyPayload*>(&data[1]));
-    OSD::AddMessage("Peer joined: " + std::string(reinterpret_cast<const IdentifyPayload*>(&data[1])->id));
-    break;
-  case MessageType::SPAWN_REQUEST:
-    handleSpawnRequest(event.peer);
-    break;
-  case MessageType::PLAYER_UPDATE:
-    handlePlayerUpdate(event.peer, reinterpret_cast<const PlayerUpdatePayload*>(&data[1]));
-    break;
-  default:
-    break;
+  try {
+    switch (static_cast<MessageType>(data[0]))
+    {
+    case MessageType::IDENTIFY: {
+      IdentifyPayload payload;
+      deserialize_identify(&data[1], len - 1, payload);
+      handleIdentify(event.peer, payload);
+
+      OSD::AddMessage("Peer joined: " + payload.name);
+      break;
+    }
+    case MessageType::SPAWN_REQUEST:
+      handleSpawnRequest(event.peer);
+      break;
+    case MessageType::PLAYER_UPDATE: {
+      PlayerUpdatePayload payload;
+      deserialize_player_update(&data[1], len - 1, payload);
+      handlePlayerUpdate(event.peer, payload);
+      break;
+    }
+    default:
+      break;
+    }
+  } catch (const cereal::Exception& e) {
+    std::cerr << "Cereal exception: " << e.what() << "\n";
   }
 }
 
-void Host::handleIdentify(ENetPeer* peer, const IdentifyPayload* payload)
+void Host::handleIdentify(ENetPeer* peer, const IdentifyPayload& payload)
 {
-  players->addPlayer(peer, payload->id, payload->name);
-  std::cout << "IDENTIFY received from " << payload->id << "\n";
+  players->addPlayer(peer, payload.id, payload.name);
+  std::cout << "IDENTIFY received from " << payload.id << "\n";
 }
 
 void Host::handleSpawnRequest(ENetPeer* peer)
@@ -138,10 +153,10 @@ void Host::handleSpawnRequest(ENetPeer* peer)
   // sendMessage(peer, MessageType::SPAWN_ACCEPTED, &spawn, sizeof(spawn));
 }
 
-void Host::handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update)
+void Host::handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload& update)
 {
   std::lock_guard<std::mutex> lock(stateMutex);
-  players->updatePlayer(*update);
+  players->updatePlayer(update);
 }
 
 void Host::broadcastLoop()
@@ -168,19 +183,19 @@ void Host::broadcastLoop()
     {
       std::lock_guard<std::mutex> lock(stateMutex);
 
-      auto peers = players->getRemotePlayers();
-      for (const auto& player : peers)
+      auto& peers = players->getRemotePlayers();
+      for (auto& player : peers)
       {
-        if (player.dirty)
+        if (player->dirty)
         {
           for (auto& other_player : peers)
           {
-            if (player.peer == other_player.peer)
+            if (player->peer == other_player->peer)
               continue;
 
             std::vector<uint8_t> player_update_buffer;
-            serialize_player_update(other_player.state, player_update_buffer);
-            sendMessage(player.peer, MessageType::PLAYER_UPDATE, player_update_buffer.data(), player_update_buffer.size());
+            serialize_player_update(other_player->state, player_update_buffer);
+            sendMessage(player->peer, MessageType::PLAYER_UPDATE, player_update_buffer);
           }
         }
 
@@ -188,10 +203,16 @@ void Host::broadcastLoop()
 
         std::vector<uint8_t> player_update_buffer;
         serialize_player_update(*state, player_update_buffer);
-        sendMessage(player.peer, MessageType::PLAYER_UPDATE, player_update_buffer.data(), player_update_buffer.size());
+        sendMessage(player->peer, MessageType::PLAYER_UPDATE, player_update_buffer);
 
-        // // world sync
-        // sendMessage(player.peer, MessageType::WORLD_UPDATE, &world_updates, sizeof(std::vector<AddrUpdate>) + (sizeof(AddrUpdate) * world_updates.size()));
+        if (world_updates.empty())
+          continue;
+
+        std::vector<uint8_t> world_update_buffer;
+        serialize_world_update(WorldSyncPayload {
+            world_updates
+        }, world_update_buffer);
+        sendMessage(player->peer, MessageType::WORLD_UPDATE, world_update_buffer);
       }
     }
 
@@ -205,7 +226,6 @@ void Host::broadcastLoop()
 }
 
 void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
-
   std::stringstream ss;
   ss << "HOST\n";
 
@@ -217,17 +237,14 @@ void Host::frameAdvance(const Core::CPUThreadGuard& guard) {
   record_world_snapshot(guard);
 
   for (auto& player : players->getRemotePlayers()) {
-    ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player.state.id), 
-                      player.state.world_position.position.x,
-                      player.state.world_position.position.y,
-                      player.state.world_position.position.z);
+    ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player->state.id), 
+                      player->state.world_position.position.x,
+                      player->state.world_position.position.y,
+                      player->state.world_position.position.z);
   }
     
-  u32 local_player_addr =
-      PowerPC::MMU::HostRead_U32(guard, symbolDb().GetSymbolFromName("s_primary_player")->address);
-
   PlayerUpdatePayload* local_state = players->getLocalPlayerState();
-  ss << fmt::format("Local Player ({}):\n {}, {}, {}\n", local_player_addr, 
+  ss << fmt::format("Local Player ({}):\n {}, {}, {}\n", s_primary_player, 
                   local_state->world_position.position.x,
                   local_state->world_position.position.y,
                   local_state->world_position.position.z);

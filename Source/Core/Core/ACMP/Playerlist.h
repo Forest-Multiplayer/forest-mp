@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 #include <unordered_map>
+#include <memory>
 
 namespace ACMP {
 
@@ -36,11 +37,11 @@ public:
   void clearDirtyFlags();
 
   PlayerUpdatePayload* getLocalPlayerState();
-  std::vector<Player> getRemotePlayers() const {
+  std::vector<std::unique_ptr<Player>>& getRemotePlayers() {
     return m_players;
   }
 private:
-    std::vector<Player> m_players;
+    std::vector<std::unique_ptr<Player>> m_players {};
     std::string local_id;
     std::string local_name;
     PlayerUpdatePayload local_state {};

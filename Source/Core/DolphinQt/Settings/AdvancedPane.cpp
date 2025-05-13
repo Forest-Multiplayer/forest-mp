@@ -125,6 +125,7 @@ void AdvancedPane::CreateLayout()
 
   m_ram_override_checkbox = new QCheckBox(tr("Enable Emulated Memory Size Override"));
   m_ram_override_checkbox->setEnabled(false);
+  m_ram_override_checkbox->setChecked(true);
   ram_override_layout->addWidget(m_ram_override_checkbox);
 
   auto* mem1_override_slider_layout = new QHBoxLayout();

@@ -2,6 +2,8 @@
 #include "ACMP.h"
 #include "ACMPCommon.h"
 
+#include <cereal/archives/binary.hpp>
+
 #include <Common/Assert.h>
 #include <Core/Config/MainSettings.h>
 #include <Core/PowerPC/MMU.h>
@@ -38,7 +40,7 @@ bool Client::connect(const std::string& host, uint16_t port, const std::string& 
     std::vector<uint8_t> data;
     serialize_identify(payload, data);
 
-    sendMessage(peer, MessageType::IDENTIFY, data.data(), data.size());
+    sendMessage(peer, MessageType::IDENTIFY, data);
 
     return true;
   }
@@ -63,21 +65,23 @@ void Client::sendPlayerUpdate(const PlayerUpdatePayload& update)
 {
   if (peer)
   {
-    sendMessage(peer, MessageType::PLAYER_UPDATE, &update, sizeof(update));
+    std::vector<uint8_t> data;
+    serialize_player_update(update, data);
+    sendMessage(peer, MessageType::PLAYER_UPDATE, data);
   }
 }
 
 void Client::start()
 {
-  if (!client || running)
+  if (!client || running.load())
     return;
-  running = true;
+  running.store(true);
   pollThread = std::thread(&Client::pollLoop, this);
 }
 
 void Client::stop()
 {
-  running = false;
+  running.store(false);
   if (pollThread.joinable())
     pollThread.join();
 }
@@ -86,8 +90,12 @@ void Client::pollLoop()
 {
   ENetEvent event;
   bool needs_reconnect = false;
-  while (running)
+  while (running.load())
   {
+    if (!players) {
+      return;
+    }
+
     int r;
     while ((r = enet_host_service(client, &event, 10)) > 0)
     {
@@ -115,7 +123,7 @@ void Client::pollLoop()
         std::vector<uint8_t> data;
         serialize_identify(payload, data);
 
-        sendMessage(peer, MessageType::IDENTIFY, data.data(), data.size());
+        sendMessage(peer, MessageType::IDENTIFY, data);
         enet_packet_destroy(event.packet);
       }
     }
@@ -128,8 +136,7 @@ void Client::pollLoop()
         continue;
       }
 
-      auto sz = sizeof(Message);
-      ENetPacket* packet = enet_packet_create(pending.data.data(), sz, ENET_PACKET_FLAG_RELIABLE);
+      ENetPacket* packet = enet_packet_create(pending.data.data(), pending.data.size(), ENET_PACKET_FLAG_RELIABLE);
       enet_peer_send(pending.peer, 0, packet);
       enet_host_flush(pending.peer->host);
     }
@@ -146,22 +153,38 @@ void Client::pollLoop()
 
 void Client::handleMessage(ENetEvent& event, enet_uint8* data, size_t len)
 {
-  switch (static_cast<MessageType>(data[0]))
-  {
-  case MessageType::SPAWN_ACCEPTED:
-    // handleSpawnAccepted(reinterpret_cast<const SpawnData*>(&data[1]));
-    break;
-  case MessageType::PLAYER_UPDATE:
-    handlePlayerUpdate(reinterpret_cast<const PlayerUpdatePayload*>(&data[1]));
-    break;
-  default:
-    break;
+  try {
+    switch (static_cast<MessageType>(data[0]))
+    {
+    case MessageType::SPAWN_ACCEPTED:
+      // handleSpawnAccepted(reinterpret_cast<const SpawnData*>(&data[1]));
+      break;
+    case MessageType::PLAYER_UPDATE: {
+      PlayerUpdatePayload payload;
+      deserialize_player_update(&data[1], len - 1, payload);
+      handlePlayerUpdate(payload);
+      break;
+    }
+    case MessageType::WORLD_UPDATE: {
+      WorldSyncPayload payload;
+      deserialize_world_update(&data[1], len - 1, payload);
+      handleWorldUpdate(payload.updates);
+      break;
+    }
+    default:
+      break;
+    }
+  } catch (const cereal::Exception& e) {
+    std::cerr << "Deserialization error: " << e.what() << std::endl;
   }
 }
 
 
 void Client::handleWorldUpdate(const std::vector<AddrUpdate> updates)
 {
+  if (updates.empty())
+    return;
+
   for (const auto& update : updates)
   {
     auto& s = s_world_snapshot.snapshot[update.addr];
@@ -177,9 +200,9 @@ void Client::handleSpawnAccepted(const SpawnData* data)
   //   writePositionAngle(guard, player.data.world_position, player_addr + 0x028);
 }
 
-void Client::handlePlayerUpdate(const PlayerUpdatePayload* update)
+void Client::handlePlayerUpdate(const PlayerUpdatePayload& update)
 {
-  players->updatePlayer(*update);
+  players->updatePlayer(update);
 }
 
 void Client::frameAdvance(const Core::CPUThreadGuard& guard)
@@ -187,15 +210,18 @@ void Client::frameAdvance(const Core::CPUThreadGuard& guard)
   std::stringstream ss;
   ss << "CLIENT\n";
 
+  if (!running.load() || !client || !players)
+    return;
+
   sync_game_memory(guard, *players);
   apply_world_snapshot(guard);
 
   for (auto& player : players->getRemotePlayers())
   {
-    ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player.state.id),
-                      player.state.world_position.position.x,
-                      player.state.world_position.position.y,
-                      player.state.world_position.position.z);
+    ss << fmt::format("Player {}:\n {}, {}, {}\n", std::string(player->state.id),
+                      player->state.world_position.position.x,
+                      player->state.world_position.position.y,
+                      player->state.world_position.position.z);
   }
 
   u32 local_player_addr =
@@ -203,7 +229,8 @@ void Client::frameAdvance(const Core::CPUThreadGuard& guard)
 
   PlayerUpdatePayload* local_state = players->getLocalPlayerState();
   std::vector<uint8_t> buffer;
-  sendMessage(peer, MessageType::PLAYER_UPDATE, buffer.data(), buffer.size());
+  serialize_player_update(*local_state, buffer);
+  sendMessage(peer, MessageType::PLAYER_UPDATE, buffer);
 
   ss << fmt::format("Local Player ({}):\n {}, {}, {}\n", local_player_addr,
                     local_state->world_position.position.x, local_state->world_position.position.y,

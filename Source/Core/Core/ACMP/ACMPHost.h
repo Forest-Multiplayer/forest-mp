@@ -41,8 +41,8 @@ private:
   void broadcastLoop();
 
   void handleMessage(ENetEvent& event, uint8_t* msg, size_t len);
-  void handleIdentify(ENetPeer* peer, const IdentifyPayload* payload);
+  void handleIdentify(ENetPeer* peer, const IdentifyPayload& payload);
   void handleSpawnRequest(ENetPeer* peer);
-  void handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload* update);
+  void handlePlayerUpdate(ENetPeer* peer, const PlayerUpdatePayload& update);
 };
 }  // namespace ACMP
